@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { Analytics } from '@vercel/analytics/react';
 import { 
   Star, 
   Search, 
@@ -2248,6 +2249,7 @@ export default function App() {
         </div>
       )}
 
+      <Analytics />
     </div>
   );
 }
