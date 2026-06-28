@@ -1,0 +1,6 @@
+{
+  "name": "ReviewPlease",
+  "description": "AI-powered Google Review & Reputation Platform dashboard. Manage dynamic QR codes, reviews, and generate AI reviews and professional replies.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
