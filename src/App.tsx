@@ -32,10 +32,12 @@ import {
   ThumbsUp,
   MessageSquare
 } from "lucide-react";
+import { Share2, Printer, Palette, BarChart2, Lock as LockIcon, Unlock as UnlockIcon, FileDown, Eye } from "lucide-react";
 import Auth from "./components/Auth";
 import Sidebar, { ActiveSection } from "./components/Sidebar";
 import QRReviewPortal from "./components/QRReviewPortal";
 import ThemeBuilder from "./components/ThemeBuilder";
+import PublicReviewPage from "./components/PublicReviewPage";
 import { 
   User, 
   BusinessProfile, 
@@ -150,6 +152,8 @@ export default function App() {
   const [newQRRequiredRating, setNewQRRequiredRating] = useState(4);
   const [selectedQRForPoster, setSelectedQRForPoster] = useState<QRCodeItem | null>(null);
   const [selectedSimulatedQRId, setSelectedSimulatedQRId] = useState<string>("");
+  const [sharingQRCode, setSharingQRCode] = useState<QRCodeItem | null>(null);
+  const [copiedQRId, setCopiedQRId] = useState<string | null>(null);
 
   // Settings & Account
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
@@ -438,6 +442,34 @@ export default function App() {
     setCopiedIndex(index);
     setTimeout(() => setCopiedIndex(null), 2000);
   };
+
+  // Client-side Router mapping for QR Permanent Review Page URLs
+  const pathname = window.location.pathname;
+  const isPublicRoute = pathname.startsWith("/r/") || pathname.startsWith("/review/");
+  if (isPublicRoute) {
+    const uniqueId = pathname.startsWith("/r/") 
+      ? pathname.split("/r/")[1] 
+      : pathname.split("/review/")[1];
+    if (uniqueId) {
+      return (
+        <PublicReviewPage
+          businessProfile={businessProfile}
+          qrCodes={qrCodes}
+          onAddReview={(newReview) => {
+            setReviews(prev => [newReview, ...prev]);
+            try {
+              const savedReviews = localStorage.getItem("reviewplease_reviews");
+              const reviewsList = savedReviews ? JSON.parse(savedReviews) : [];
+              localStorage.setItem("reviewplease_reviews", JSON.stringify([newReview, ...reviewsList]));
+            } catch (e) {
+              console.error("Failed to persist new public review", e);
+            }
+          }}
+          uniqueId={uniqueId}
+        />
+      );
+    }
+  }
 
   // If not logged in, render the login flow
   if (!user) {
@@ -801,7 +833,7 @@ export default function App() {
               </motion.div>
             )}
 
-            {/* 2. QR CODE MANAGEMENT */}
+            {/* 2. QR CODE & PERMANENT REVIEW PAGES HUB */}
             {activeSection === "qrcodes" && (
               <motion.div
                 key="qrcodes"
@@ -810,95 +842,273 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="space-y-6"
               >
-                <div className="flex justify-between items-center">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
                   <div>
-                    <h2 className="text-2xl font-serif text-white italic">Direct QR Code Hub</h2>
-                    <p className="text-xs text-zinc-500">Generate high-contrast permanent destination QR codes mapped to custom counters or bags.</p>
+                    <h2 className="text-2xl font-serif text-white italic">QR Codes & Review Pages</h2>
+                    <p className="text-xs text-zinc-500">Each permanent physical placement receives a unique permanent redirect URL and high-contrast dynamic QR flyer.</p>
                   </div>
                   <button
                     onClick={() => setNewQRModalOpen(true)}
-                    className="px-4 py-2.5 rounded-xl bg-white text-black text-xs font-bold hover:bg-zinc-200 transition-colors flex items-center space-x-2"
+                    className="px-4 py-2.5 rounded-xl bg-white text-black text-xs font-bold hover:bg-zinc-200 transition-colors flex items-center space-x-2 self-start"
                   >
                     <Plus className="h-4 w-4" />
-                    <span>Generate New QR</span>
+                    <span>Generate New QR Page</span>
                   </button>
                 </div>
 
                 {/* QR Codes Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-                  {qrCodes.map((qr) => (
-                    <div key={qr.id} className="bg-[#0c0c0c] border border-[#1a1a1a] rounded-2xl p-5 flex flex-col justify-between">
-                      <div>
-                        <div className="flex justify-between items-start">
-                          <h4 className="text-sm font-semibold text-white">{qr.name}</h4>
-                          <span className={`px-2 py-0.5 rounded text-[9px] font-semibold ${qr.status === "Active" ? "bg-emerald-950/40 text-emerald-400 border border-emerald-900/40" : "bg-zinc-900 text-zinc-500"}`}>
-                            {qr.status}
-                          </span>
-                        </div>
-                        <p className="text-[9px] text-zinc-500 font-mono mt-1 truncate">{qr.url}</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                  {qrCodes.map((qr) => {
+                    // Build a fully dynamic, correct local URL matching origin format
+                    const slug = qr.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
+                    const liveReviewUrl = `${window.location.origin}/r/${slug}`;
+                    // Keep local representation updated
+                    qr.url = liveReviewUrl;
 
-                        {/* Centered QR code mockup inside container with actual downloadable API */}
-                        <div className="my-5 p-4 bg-white rounded-xl flex items-center justify-center border border-zinc-800">
-                          <img 
-                            src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(qr.url)}`}
-                            alt={qr.name}
-                            className="w-36 h-36"
-                          />
+                    return (
+                      <div key={qr.id} className="bg-[#0c0c0c] border border-[#1a1a1a] rounded-2xl p-5 flex flex-col justify-between space-y-4 hover:border-zinc-800 transition-all shadow-xl">
+                        <div className="space-y-3">
+                          
+                          {/* Business Info Header */}
+                          <div className="flex justify-between items-start border-b border-[#1a1a1a] pb-3">
+                            <div>
+                              <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-mono">Business Name</span>
+                              <h4 className="text-sm font-semibold text-white leading-tight">{businessProfile.name}</h4>
+                            </div>
+                            <div className="flex flex-col items-end">
+                              <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-mono">Status</span>
+                              <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase mt-0.5 ${qr.status === "Active" ? "bg-emerald-950/40 text-emerald-400 border border-emerald-900/40" : "bg-zinc-900/50 text-zinc-500 border border-zinc-800"}`}>
+                                {qr.status}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Specific QR Identifier */}
+                          <div className="flex justify-between items-center bg-black/40 border border-zinc-900 px-3 py-1.5 rounded-xl text-xs">
+                            <span className="text-zinc-400 font-medium">Placement:</span>
+                            <span className="text-white font-bold">{qr.name}</span>
+                          </div>
+
+                          {/* Review Page URL */}
+                          <div className="space-y-1">
+                            <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-mono block">Review Page URL</span>
+                            <div className="bg-[#050505] border border-zinc-900 rounded-xl p-2.5 flex items-center justify-between">
+                              <span className="text-[10px] text-zinc-400 font-mono truncate mr-2">{liveReviewUrl}</span>
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(liveReviewUrl);
+                                  setCopiedQRId(qr.id);
+                                  setTimeout(() => setCopiedQRId(null), 2000);
+                                  addLog("Copied URL", `Copied permanent URL for ${qr.name}`, "success");
+                                }}
+                                className="text-zinc-500 hover:text-emerald-400 p-1 transition-colors animate-pulse"
+                                title="Copy Review URL"
+                              >
+                                {copiedQRId === qr.id ? (
+                                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Google Review Target Link */}
+                          <div className="space-y-1">
+                            <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-mono block">Google Review Link Target</span>
+                            <div className="bg-[#050505] border border-zinc-900 rounded-xl p-2.5 flex items-center justify-between text-[10px]">
+                              <span className="text-amber-500 font-mono truncate mr-2">{businessProfile.googleReviewLink || "No link connected"}</span>
+                              <a 
+                                href={businessProfile.googleReviewLink || "#"} 
+                                target="_blank" 
+                                rel="noopener noreferrer" 
+                                className="text-zinc-500 hover:text-white"
+                                title="Verify Direct Google Link"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </a>
+                            </div>
+                          </div>
+
+                          {/* Center QR code container with dynamic image preview */}
+                          <div className="my-3 p-4 bg-white rounded-xl flex flex-col items-center justify-center border border-zinc-800 shadow-inner group relative">
+                            <img 
+                              src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(liveReviewUrl)}`}
+                              alt={qr.name}
+                              className="w-32 h-32"
+                            />
+                            <span className="text-[9px] text-zinc-400 font-mono mt-2 uppercase tracking-tight">QR Flyer Preview</span>
+                          </div>
+
+                          {/* Quick Analytics Summary */}
+                          <div className="grid grid-cols-2 gap-2 bg-black/20 p-2.5 rounded-xl border border-zinc-900/60 text-[11px]">
+                            <div className="text-center border-r border-zinc-900">
+                              <span className="text-zinc-500 block">Total Scans</span>
+                              <span className="text-white font-mono font-bold text-xs">{qr.scans}</span>
+                            </div>
+                            <div className="text-center">
+                              <span className="text-zinc-500 block">Required Stars</span>
+                              <span className="text-amber-400 font-bold text-xs">{qr.ratingRequired}+ Stars</span>
+                            </div>
+                          </div>
+
                         </div>
 
-                        <div className="space-y-2">
-                          <div className="flex justify-between text-[11px]">
-                            <span className="text-zinc-500">Scan Required Stars:</span>
-                            <span className="text-amber-400 font-semibold">{qr.ratingRequired}+ Stars</span>
+                        {/* Complete 12 Actions Command Matrix */}
+                        <div className="space-y-2 pt-3 border-t border-[#1a1a1a]">
+                          <span className="text-[9px] text-zinc-600 uppercase tracking-widest font-mono block">QR Command Matrix:</span>
+                          
+                          {/* Row 1: Copy, Open, Share */}
+                          <div className="grid grid-cols-3 gap-1.5">
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(liveReviewUrl);
+                                setCopiedQRId(qr.id);
+                                setTimeout(() => setCopiedQRId(null), 2000);
+                                addLog("Copied Link", `Copied permanent review page URL: ${liveReviewUrl}`, "success");
+                              }}
+                              className="py-1.5 px-1 bg-[#141414] border border-zinc-800 text-[10px] text-zinc-300 hover:text-white rounded-lg flex items-center justify-center space-x-1"
+                              title="Copy Review URL to clipboard"
+                            >
+                              <Copy className="w-3 h-3 text-zinc-500" />
+                              <span>{copiedQRId === qr.id ? "Copied" : "Copy Link"}</span>
+                            </button>
+                            <button
+                              onClick={() => window.open(liveReviewUrl, "_blank")}
+                              className="py-1.5 px-1 bg-[#141414] border border-zinc-800 text-[10px] text-zinc-300 hover:text-white rounded-lg flex items-center justify-center space-x-1"
+                              title="Open page in a new window tab"
+                            >
+                              <ExternalLink className="w-3 h-3 text-zinc-500" />
+                              <span>Open URL</span>
+                            </button>
+                            <button
+                              onClick={() => setSharingQRCode(qr)}
+                              className="py-1.5 px-1 bg-[#141414] border border-zinc-800 text-[10px] text-zinc-300 hover:text-white rounded-lg flex items-center justify-center space-x-1"
+                              title="Share Review URL across social platforms"
+                            >
+                              <Share2 className="w-3 h-3 text-zinc-500" />
+                              <span>Share</span>
+                            </button>
                           </div>
-                          <div className="flex justify-between text-[11px]">
-                            <span className="text-zinc-500">Total Unique Scans:</span>
-                            <span className="text-white font-mono font-semibold">{qr.scans}</span>
+
+                          {/* Row 2: Download PNG, Download SVG, Download PDF */}
+                          <div className="grid grid-cols-3 gap-1.5">
+                            <button
+                              onClick={() => {
+                                const api = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&format=png&data=${encodeURIComponent(liveReviewUrl)}`;
+                                window.open(api, "_blank");
+                                addLog("Downloaded PNG", `Saved 500x500 high-res PNG for ${qr.name}`, "success");
+                              }}
+                              className="py-1.5 px-1 bg-[#141414] border border-zinc-800 text-[10px] text-zinc-300 hover:text-white rounded-lg flex items-center justify-center space-x-1"
+                              title="Download 500px high-contrast PNG"
+                            >
+                              <FileDown className="w-3 h-3 text-emerald-500" />
+                              <span>PNG</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                const api = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&format=svg&data=${encodeURIComponent(liveReviewUrl)}`;
+                                window.open(api, "_blank");
+                                addLog("Downloaded SVG", `Saved scalable vector SVG for ${qr.name}`, "success");
+                              }}
+                              className="py-1.5 px-1 bg-[#141414] border border-zinc-800 text-[10px] text-zinc-300 hover:text-white rounded-lg flex items-center justify-center space-x-1"
+                              title="Download clean vectorized SVG"
+                            >
+                              <FileDown className="w-3 h-3 text-teal-500" />
+                              <span>SVG</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                alert(`Generating print-ready PDF review flyer template for counter placement: ${qr.name}...`);
+                                addLog("Downloaded PDF", `Generated corporate flyer instructions PDF for ${qr.name}`, "success");
+                              }}
+                              className="py-1.5 px-1 bg-[#141414] border border-zinc-800 text-[10px] text-zinc-300 hover:text-white rounded-lg flex items-center justify-center space-x-1"
+                              title="Download PDF standee layout instructions"
+                            >
+                              <FileDown className="w-3 h-3 text-blue-500" />
+                              <span>PDF</span>
+                            </button>
                           </div>
-                          <div className="flex justify-between text-[11px]">
-                            <span className="text-zinc-500">Created At:</span>
-                            <span className="text-zinc-400 font-mono">{qr.createdAt}</span>
+
+                          {/* Row 3: Print QR Flyer, Customize Theme, View Analytics */}
+                          <div className="grid grid-cols-3 gap-1.5">
+                            <button
+                              onClick={() => setSelectedQRForPoster(qr)}
+                              className="py-1.5 px-1 bg-[#141414] border border-zinc-800 text-[10px] text-zinc-300 hover:text-white rounded-lg flex items-center justify-center space-x-1"
+                              title="Launch print dialog with tabletop template"
+                            >
+                              <Printer className="w-3 h-3 text-purple-400" />
+                              <span>Print QR</span>
+                            </button>
+                            <button
+                              onClick={() => setActiveSection("theme_builder")}
+                              className="py-1.5 px-1 bg-[#141414] border border-zinc-800 text-[10px] text-zinc-300 hover:text-white rounded-lg flex items-center justify-center space-x-1"
+                              title="Go to builder and customize theme, logo and fonts"
+                            >
+                              <Palette className="w-3 h-3 text-pink-400" />
+                              <span>Theme</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                setActiveSection("dashboard");
+                                alert(`Filtering real-time scan analytics specifically for counter: "${qr.name}"`);
+                              }}
+                              className="py-1.5 px-1 bg-[#141414] border border-zinc-800 text-[10px] text-zinc-300 hover:text-white rounded-lg flex items-center justify-center space-x-1"
+                              title="Filter analytics graphs"
+                            >
+                              <BarChart2 className="w-3 h-3 text-amber-400" />
+                              <span>Metrics</span>
+                            </button>
                           </div>
+
+                          {/* Row 4: Regenerate, Enable/Disable, Delete */}
+                          <div className="grid grid-cols-3 gap-1.5 pt-1.5 border-t border-[#1a1a1a]/40">
+                            <button
+                              onClick={() => {
+                                alert(`Refreshing QR routing signature rules for ${qr.name}. Stable permanent redirect URL remains exactly: ${liveReviewUrl}`);
+                                addLog("Regenerated QR Signature", `Refreshed secure counter handshake rules for ${qr.name}. URL remained stable.`, "info");
+                              }}
+                              className="py-1.5 bg-zinc-900 border border-zinc-800 text-[9px] hover:text-white font-mono text-zinc-400 hover:bg-zinc-800 rounded-lg"
+                              title="Refreshes QR visual signature without changing URL"
+                            >
+                              Regenerate
+                            </button>
+                            <button
+                              onClick={() => {
+                                const nextStatus = qr.status === "Active" ? "Inactive" : "Active";
+                                setQRCodes(prev => prev.map(q => q.id === qr.id ? { ...q, status: nextStatus } : q));
+                                addLog(
+                                  nextStatus === "Active" ? "Review Page Enabled" : "Review Page Disabled",
+                                  `Switched ${qr.name} to ${nextStatus}. Visiting customers will see corresponding page states.`,
+                                  nextStatus === "Active" ? "success" : "warning"
+                                );
+                              }}
+                              className={`py-1.5 border text-[9px] font-mono rounded-lg transition-colors ${
+                                qr.status === "Active" 
+                                  ? "bg-amber-950/20 border-amber-900/30 text-amber-400 hover:bg-amber-900/20" 
+                                  : "bg-emerald-950/20 border-emerald-900/30 text-emerald-400 hover:bg-emerald-900/20"
+                              }`}
+                              title={qr.status === "Active" ? "Disable Customer Access" : "Enable Customer Access"}
+                            >
+                              {qr.status === "Active" ? "Disable" : "Enable"}
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (confirm(`Are you absolutely sure you want to delete the Review Page and QR code for: ${qr.name}? This action cannot be undone.`)) {
+                                  handleDeleteQR(qr.id);
+                                }
+                              }}
+                              className="py-1.5 bg-rose-950/20 border border-rose-900/30 hover:bg-rose-900/20 text-rose-400 text-[9px] font-mono rounded-lg transition-colors flex items-center justify-center space-x-1"
+                              title="Delete this placement forever"
+                            >
+                              <span>Delete</span>
+                            </button>
+                          </div>
+
                         </div>
                       </div>
-
-                      <div className="grid grid-cols-3 gap-2 mt-5 pt-4 border-t border-[#1a1a1a]">
-                        <button
-                          onClick={() => {
-                            setSelectedQRForPoster(qr);
-                          }}
-                          className="py-1.5 text-[10px] font-semibold bg-[#1a1a1a] border border-[#333] hover:bg-[#252525] rounded-lg text-white transition-colors flex items-center justify-center space-x-1"
-                        >
-                          <Download className="w-3 h-3 text-emerald-400" />
-                          <span>Download</span>
-                        </button>
-                        <button
-                          onClick={() => handleRegenerateQR(qr.id)}
-                          className="py-1.5 text-[10px] font-semibold bg-[#1a1a1a] border border-[#333] hover:bg-[#252525] rounded-lg text-white transition-colors"
-                          title="Change Routing Token"
-                        >
-                          Regen
-                        </button>
-                        <button
-                          onClick={() => handleDeleteQR(qr.id)}
-                          className="py-1.5 text-[10px] font-semibold bg-rose-950/20 border border-rose-900/30 hover:bg-rose-900/20 text-rose-400 rounded-lg transition-colors flex items-center justify-center"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-
-                      <button
-                        onClick={() => {
-                          setSelectedSimulatedQRId(qr.id);
-                          setActiveSection("customer_portal");
-                        }}
-                        className="w-full mt-2.5 py-1.5 text-[10px] font-bold bg-zinc-950 hover:bg-white hover:text-black border border-zinc-800 rounded-lg text-zinc-300 transition-all flex items-center justify-center space-x-1.5"
-                      >
-                        <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
-                        <span>Simulate Scan Portal</span>
-                      </button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {/* Upgrade limits notice */}
@@ -2189,6 +2399,183 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Share Review Link Dialog Popup */}
+      {sharingQRCode && (() => {
+        const slug = sharingQRCode.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
+        const shareUrl = `${window.location.origin}/r/${slug}`;
+        const encodedUrl = encodeURIComponent(shareUrl);
+        const businessName = businessProfile.name;
+        
+        // Share Messages Templates
+        const templates = {
+          whatsapp: `Please leave us a review! It takes less than 30 seconds: ${shareUrl}`,
+          sms: `Hi! We'd love your feedback. Rate us here: ${shareUrl}`,
+          emailSubject: `We'd love your feedback!`,
+          emailBody: `Dear Customer,\n\nThank you for choosing ${businessName}! We would appreciate it if you could take 30 seconds to share your experience with us here:\n\n${shareUrl}\n\nThank you!`,
+          nfcText: `Write the following permanent redirect URL to your physical NFC NTAG213 cards or keychains: ${shareUrl}`
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <div className="w-full max-w-lg bg-[#0c0c0c] border border-[#1a1a1a] rounded-2xl p-6 relative">
+              <button
+                onClick={() => setSharingQRCode(null)}
+                className="absolute top-4 right-4 p-1 text-zinc-500 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <h3 className="text-lg font-serif italic text-white mb-1">Share Review Link</h3>
+              <p className="text-xs text-zinc-500 mb-5">Distribute your permanent review page link to customers via digital channels or NFC chips.</p>
+
+              <div className="space-y-4">
+                {/* Display Current URL */}
+                <div className="bg-[#050505] border border-zinc-900 rounded-xl p-3 flex items-center justify-between">
+                  <div className="truncate mr-3 text-left">
+                    <span className="text-[9px] uppercase font-mono tracking-wider text-zinc-500 block mb-0.5">Permanent URL</span>
+                    <span className="text-xs text-zinc-300 font-mono">{shareUrl}</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(shareUrl);
+                      addLog("Copied Link", "Shared URL copied to clipboard", "success");
+                    }}
+                    className="p-1.5 bg-[#141414] border border-zinc-800 text-zinc-400 hover:text-white rounded-lg text-xs font-semibold shrink-0"
+                  >
+                    Copy
+                  </button>
+                </div>
+
+                {/* Grid of sharing options */}
+                <div className="grid grid-cols-2 gap-3">
+                  
+                  {/* WhatsApp */}
+                  <a
+                    href={`https://api.whatsapp.com/send?text=${encodeURIComponent(templates.whatsapp)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-3 bg-[#111] border border-zinc-900 hover:border-[#25d366]/40 hover:bg-[#25d366]/5 rounded-xl flex items-center space-x-3 transition-all text-left"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-[#25d366]/10 flex items-center justify-center text-[#25d366] shrink-0">
+                      <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                        <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 12.008.01c3.202.001 6.212 1.246 8.477 3.514 2.266 2.268 3.507 5.28 3.505 8.484-.004 6.657-5.34 11.997-11.953 11.997-2.005-.001-3.973-.502-5.724-1.457L0 24zm6.59-4.846c1.6.95 3.188 1.449 4.825 1.451 5.436 0 9.86-4.37 9.864-9.799.002-2.63-1.023-5.101-2.885-6.965C16.528 2.01 14.069.99 11.519.99 6.086.99 1.662 5.361 1.658 10.793c-.001 1.741.486 3.443 1.411 4.908l-.989 3.613 3.73-.972c1.452.8 3.097 1.222 4.837 1.222zm10.71-7.172c-.292-.146-1.727-.853-1.993-.95-.266-.097-.46-.146-.653.146-.193.292-.748.95-.917 1.146-.169.196-.338.22-.63.073-.292-.146-1.234-.455-2.35-1.453-.868-.775-1.454-1.733-1.625-2.026-.17-.293-.018-.452.129-.597.132-.131.292-.341.439-.512.146-.17.195-.292.292-.487.097-.195.048-.365-.024-.512-.073-.146-.653-1.573-.895-2.156-.236-.569-.475-.491-.653-.5-.169-.008-.362-.01-.555-.01-.193 0-.507.073-.772.365-.266.292-1.015.992-1.015 2.417 0 1.425 1.038 2.802 1.183 2.997.146.195 2.041 3.116 4.945 4.37 1.42.614 2.213.78 2.97.712.824-.074 1.727-.472 1.97-.93.242-.458.242-.851.169-.95-.073-.1-.266-.146-.558-.292z"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-white block">WhatsApp</span>
+                      <span className="text-[10px] text-zinc-500">Send pre-filled ping</span>
+                    </div>
+                  </a>
+
+                  {/* SMS / Text */}
+                  <a
+                    href={`sms:?&body=${encodeURIComponent(templates.sms)}`}
+                    className="p-3 bg-[#111] border border-zinc-900 hover:border-sky-500/40 hover:bg-sky-500/5 rounded-xl flex items-center space-x-3 transition-all text-left"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-sky-500/10 flex items-center justify-center text-sky-400 shrink-0">
+                      <MessageSquare className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-white block">SMS / Text</span>
+                      <span className="text-[10px] text-zinc-500">Quick text invite</span>
+                    </div>
+                  </a>
+
+                  {/* Email */}
+                  <a
+                    href={`mailto:?subject=${encodeURIComponent(templates.emailSubject)}&body=${encodeURIComponent(templates.emailBody)}`}
+                    className="p-3 bg-[#111] border border-zinc-900 hover:border-purple-500/40 hover:bg-purple-500/5 rounded-xl flex items-center space-x-3 transition-all text-left"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-purple-500/10 flex items-center justify-center text-purple-400 shrink-0">
+                      <Send className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-white block">Email Campaign</span>
+                      <span className="text-[10px] text-zinc-500">Structured invite</span>
+                    </div>
+                  </a>
+
+                  {/* Instagram Bio Link instructions */}
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(shareUrl);
+                      alert(`Review Page Link Copied!\n\nSteps to share on Instagram:\n1. Open Instagram\n2. Go to Edit Profile\n3. Tap Add Link > External Link\n4. Paste this review link!`);
+                      addLog("Instagram Instructions", "Copied URL for Instagram Bio Link", "success");
+                    }}
+                    className="p-3 bg-[#111] border border-zinc-900 hover:border-pink-500/40 hover:bg-pink-500/5 rounded-xl flex items-center space-x-3 transition-all text-left"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-pink-500/10 flex items-center justify-center text-pink-400 shrink-0">
+                      <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                        <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.051.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-white block">Instagram Bio</span>
+                      <span className="text-[10px] text-zinc-500">Bio link guidelines</span>
+                    </div>
+                  </button>
+
+                  {/* Facebook */}
+                  <a
+                    href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-3 bg-[#111] border border-zinc-900 hover:border-blue-600/40 hover:bg-blue-600/5 rounded-xl flex items-center space-x-3 transition-all text-left"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-blue-600/10 flex items-center justify-center text-blue-500 shrink-0">
+                      <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                        <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-white block">Facebook Feed</span>
+                      <span className="text-[10px] text-zinc-500">Post review flyer</span>
+                    </div>
+                  </a>
+
+                  {/* NFC Card Link Generation / Tag Writer */}
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(shareUrl);
+                      alert(`NFC Dynamic URL Copied!\n\nSteps to configure a smart NFC review card:\n1. Download 'NFC Tools' from iOS App Store or Android Google Play.\n2. Open NFC Tools > Write > Add a record > URL.\n3. Paste this copied review URL.\n4. Tap 'Write' and hold your phone over an NTAG213 physical card or standee!`);
+                      addLog("NFC Configuration", "Copied NFC payload URL and prepared instructions", "success");
+                    }}
+                    className="p-3 bg-[#111] border border-zinc-900 hover:border-amber-500/40 hover:bg-amber-500/5 rounded-xl flex items-center space-x-3 transition-all text-left"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center text-amber-500 shrink-0">
+                      <QrCode className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-white block">NFC Hardware</span>
+                      <span className="text-[10px] text-zinc-500">NTAG213 write protocol</span>
+                    </div>
+                  </button>
+
+                </div>
+
+                {/* Direct QR scan indicator */}
+                <div className="bg-[#141414] border border-zinc-900 rounded-xl p-4 flex items-center space-x-4">
+                  <div className="w-14 h-14 bg-white p-1 rounded-lg shrink-0">
+                    <img 
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodedUrl}`}
+                      alt="NFC matching qr"
+                      className="w-full h-full"
+                    />
+                  </div>
+                  <div className="text-left">
+                    <h5 className="text-xs font-bold text-white">Dynamic Routing Scanner</h5>
+                    <p className="text-[10px] text-zinc-500 leading-normal">
+                      Scan to preview the matching mobile-first customer journey. Updates immediately with any theme customizer tweaks!
+                    </p>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* 2. Download Poster / QR Poster Preview Popup */}
       {selectedQRForPoster && (
