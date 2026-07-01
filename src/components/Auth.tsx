@@ -147,6 +147,8 @@ export default function Auth({ onLogin, onAdminAccess }: AuthProps) {
         errMsg = "This email is already in use.";
       } else if (err.code === "auth/weak-password") {
         errMsg = "Password is too weak. Please use at least 6 characters.";
+      } else if (err.code === "auth/operation-not-allowed") {
+        errMsg = "Email & Password authentication is not enabled in your Firebase project. To fix this, open your Firebase Console, navigate to Build > Authentication > Sign-in method, click 'Add new provider', and enable the 'Email/Password' provider.";
       } else if (err.message) {
         errMsg = err.message;
       }
@@ -209,6 +211,8 @@ export default function Auth({ onLogin, onAdminAccess }: AuthProps) {
       console.error("Google Auth error:", err);
       if (err.code === "auth/unauthorized-domain" || (err.message && err.message.includes("unauthorized-domain"))) {
         setError(`This domain (${window.location.hostname}) is not authorized for Google Sign-In in your Firebase project. To enable Google Sign-In, please add this domain to the "Authorized Domains" list under Authentication > Settings in your Firebase Console. Alternatively, you can use standard Email & Password sign-in/registration below instantly!`);
+      } else if (err.code === "auth/operation-not-allowed") {
+        setError("Google Sign-In is not enabled in your Firebase project. To fix this, open your Firebase Console, navigate to Build > Authentication > Sign-in method, click 'Add new provider', and enable the 'Google' provider.");
       } else {
         setError(err.message || "Failed to sign in with Google.");
       }
