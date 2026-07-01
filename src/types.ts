@@ -64,6 +64,7 @@ export interface ActivityLog {
   details: string;
   time: string;
   type: "info" | "success" | "warning" | "error";
+  timestamp?: number;
 }
 
 export interface BillingInvoice {
@@ -81,6 +82,7 @@ export interface NotificationItem {
   time: string;
   type: "review" | "billing" | "ai" | "system";
   read: boolean;
+  timestamp?: number;
 }
 
 export interface ScanAnalyticsPoint {

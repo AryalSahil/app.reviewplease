@@ -771,7 +771,7 @@ export default function QRReviewPortal({
             <div className="px-4 py-2 border-b border-[#111] bg-[#080808] flex items-center space-x-1.5 select-none text-[9px] font-mono text-zinc-500">
               <Lock className="w-3 h-3 text-emerald-500" />
               <span className="truncate flex-1 text-zinc-400">
-                reviewplease.com/biz/{businessProfile.name.toLowerCase().replace(/ /g, "-")}?token=qr_{activeQR.id}
+                {window.location.host}/r/{activeQR.name.toLowerCase().replace(/[^a-z0-9]/g, "-")}
               </span>
               <RefreshCw className="w-3 h-3 hover:text-white cursor-pointer" onClick={resetSimulatorFlow} />
             </div>

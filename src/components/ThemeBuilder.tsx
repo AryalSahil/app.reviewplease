@@ -609,7 +609,7 @@ export default function ThemeBuilder({
   // Generate NFC content payload link
   const generateNFCLink = () => {
     if (!activeQRItem) return;
-    const nfcPayload = `https://reviewplease.io/nfc-tag-write?payload=${encodeURIComponent(activeQRItem.url)}`;
+    const nfcPayload = `${window.location.origin}/nfc-tag-write?payload=${encodeURIComponent(activeQRItem.url)}`;
     navigator.clipboard.writeText(nfcPayload);
     alert(`NFC NDEF Tag write URI prepared and copied to clipboard:\n\n${nfcPayload}`);
     onAddActivityLog(
@@ -766,7 +766,7 @@ export default function ThemeBuilder({
               {/* Custom slug editable path mock */}
               <div className="md:col-span-6 bg-[#050505] border border-zinc-900 rounded-xl p-3 flex items-center justify-between">
                 <div className="flex-1 min-w-0 font-mono text-xs">
-                  <span className="text-zinc-600">reviewplease.io/review/</span>
+                  <span className="text-zinc-600">{window.location.host}/r/</span>
                   <span className="text-emerald-400 font-semibold">{activeQRItem.name.toLowerCase().replace(/[^a-z0-9]/g, "-")}</span>
                 </div>
                 <span className="text-[9px] text-emerald-400 bg-emerald-950/20 border border-emerald-900/40 px-2 py-0.5 rounded uppercase font-bold tracking-tight">
@@ -1679,7 +1679,7 @@ export default function ThemeBuilder({
               <div className="px-3 py-1.5 bg-black/40 backdrop-blur-xs border-b border-white/5 flex items-center space-x-1 font-mono text-[8px] text-zinc-500">
                 <Lock className="w-2.5 h-2.5 text-emerald-500" />
                 <span className="truncate flex-1 text-zinc-400">
-                  reviewplease.io/review/{theme.businessName.toLowerCase().replace(/ /g, "-")}
+                  {window.location.host}/r/{theme.businessName.toLowerCase().replace(/[^a-z0-9]/g, "-")}
                 </span>
                 <RefreshCw className="w-2.5 h-2.5 text-zinc-500" />
               </div>

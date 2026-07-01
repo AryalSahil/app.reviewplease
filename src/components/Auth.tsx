@@ -2,29 +2,48 @@ import React, { useState } from "react";
 import { motion } from "motion/react";
 import { Star, Mail, Lock, User as UserIcon, Shield, CheckCircle2, ArrowRight } from "lucide-react";
 import { User } from "../types";
+import { 
+  auth, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signInWithPopup, 
+  googleProvider,
+  sendPasswordResetEmail,
+  db,
+  doc,
+  setDoc,
+  getDoc
+} from "../lib/firebase";
 
 interface AuthProps {
   onLogin: (user: User) => void;
+  onAdminAccess?: () => void;
 }
 
-export default function Auth({ onLogin }: AuthProps) {
+export default function Auth({ onLogin, onAdminAccess }: AuthProps) {
   const [isLogin, setIsLogin] = useState(true);
-  const [email, setEmail] = useState("owner@sweetbites.com");
-  const [password, setPassword] = useState("password123");
-  const [name, setName] = useState("Sarah Jenkins");
-  const [businessName, setBusinessName] = useState("Sweet Bites Bakery");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [businessName, setBusinessName] = useState("");
   const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
   const [forgotEmailSent, setForgotEmailSent] = useState(false);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setIsLoading(true);
 
-    setTimeout(() => {
+    try {
       if (forgotPasswordMode) {
+        if (!email) {
+          setError("Please enter your email address.");
+          setIsLoading(false);
+          return;
+        }
+        await sendPasswordResetEmail(auth, email);
         setForgotEmailSent(true);
         setIsLoading(false);
         return;
@@ -36,36 +55,162 @@ export default function Auth({ onLogin }: AuthProps) {
         return;
       }
 
-      const mockUser: User = {
-        id: "usr_" + Math.random().toString(36).substr(2, 9),
-        email,
-        name: isLogin ? "Sarah Jenkins" : name,
-        businessName: isLogin ? "Sweet Bites Bakery" : businessName,
-        avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=120",
-        plan: "Pro",
-        role: "Owner",
-      };
+      if (isLogin) {
+        // Sign in with Firebase Auth
+        const userCredential = await signInWithEmailAndPassword(auth, email, password);
+        const firebaseUser = userCredential.user;
 
-      onLogin(mockUser);
+        // Fetch user doc from Firestore
+        const userDocRef = doc(db, "users", firebaseUser.uid);
+        const userDocSnap = await getDoc(userDocRef);
+
+        let appUser: User;
+        if (userDocSnap.exists()) {
+          appUser = userDocSnap.data() as User;
+        } else {
+          // Fallback if auth exists but no doc
+          appUser = {
+            id: firebaseUser.uid,
+            email: firebaseUser.email || email,
+            name: firebaseUser.displayName || email.split("@")[0],
+            businessName: "My Business",
+            avatar: firebaseUser.photoURL || "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=120",
+            plan: "Free",
+            role: "Owner",
+          };
+          await setDoc(userDocRef, appUser);
+        }
+
+        // Special case: make sure certain emails are designated as admins
+        if (email === "admin@reviewplease.ai" || email === "sahil265064@gmail.com") {
+          if (appUser.role !== "Admin") {
+            appUser.role = "Admin";
+            await setDoc(userDocRef, appUser, { merge: true });
+          }
+        }
+
+        onLogin(appUser);
+      } else {
+        // Sign up with Firebase Auth
+        if (!name || !businessName) {
+          setError("Please provide your name and business name.");
+          setIsLoading(false);
+          return;
+        }
+
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const firebaseUser = userCredential.user;
+
+        // Create new User profile doc
+        const isDefaultAdmin = email === "admin@reviewplease.ai" || email === "sahil265064@gmail.com";
+        const newAppUser: User = {
+          id: firebaseUser.uid,
+          email: firebaseUser.email || email,
+          name: name,
+          businessName: businessName,
+          avatar: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=120",
+          plan: "Pro",
+          role: isDefaultAdmin ? "Admin" : "Owner",
+        };
+
+        await setDoc(doc(db, "users", firebaseUser.uid), newAppUser);
+
+        // Initialize default business profile in database
+        const defaultProfile = {
+          id: firebaseUser.uid,
+          name: businessName,
+          logo: "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&q=80&w=120",
+          category: "Bakery & Cafe",
+          address: "128 Gourmet Ave, Suite A, San Francisco, CA 94107",
+          phone: "(415) 555-8931",
+          website: "https://www.sweetbitesbakery.com",
+          googleReviewLink: "https://g.page/r/sweet-bites-sf/review",
+          hours: "Mon-Sat: 7:00 AM - 6:00 PM, Sun: 8:00 AM - 4:00 PM",
+          socials: {
+            facebook: "https://facebook.com",
+            instagram: "https://instagram.com",
+            twitter: "https://twitter.com",
+            linkedin: "https://linkedin.com"
+          },
+          userId: firebaseUser.uid
+        };
+        await setDoc(doc(db, "businesses", firebaseUser.uid), defaultProfile);
+
+        onLogin(newAppUser);
+      }
+    } catch (err: any) {
+      console.error("Authentication error:", err);
+      let errMsg = "An error occurred during authentication.";
+      if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
+        errMsg = "Invalid email or password.";
+      } else if (err.code === "auth/email-already-in-use") {
+        errMsg = "This email is already in use.";
+      } else if (err.code === "auth/weak-password") {
+        errMsg = "Password is too weak. Please use at least 6 characters.";
+      } else if (err.message) {
+        errMsg = err.message;
+      }
+      setError(errMsg);
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
-  const handleGoogleLogin = () => {
+  const handleGoogleLogin = async () => {
     setIsLoading(true);
-    setTimeout(() => {
-      const mockUser: User = {
-        id: "usr_google",
-        email: "sarah.j@gmail.com",
-        name: "Sarah Jenkins",
-        businessName: "Sweet Bites Bakery",
-        avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=120",
-        plan: "Pro",
-        role: "Owner",
-      };
-      onLogin(mockUser);
+    setError("");
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const firebaseUser = result.user;
+
+      const userDocRef = doc(db, "users", firebaseUser.uid);
+      const userDocSnap = await getDoc(userDocRef);
+
+      let appUser: User;
+      if (userDocSnap.exists()) {
+        appUser = userDocSnap.data() as User;
+      } else {
+        const isDefaultAdmin = firebaseUser.email === "admin@reviewplease.ai" || firebaseUser.email === "sahil265064@gmail.com";
+        appUser = {
+          id: firebaseUser.uid,
+          email: firebaseUser.email || "",
+          name: firebaseUser.displayName || "Google User",
+          businessName: "My Business",
+          avatar: firebaseUser.photoURL || "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=120",
+          plan: "Pro",
+          role: isDefaultAdmin ? "Admin" : "Owner",
+        };
+        await setDoc(userDocRef, appUser);
+
+        // Also seed initial business doc for Google user
+        const defaultProfile = {
+          id: firebaseUser.uid,
+          name: "My Business",
+          logo: "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&q=80&w=120",
+          category: "Retail Business",
+          address: "Main Street, USA",
+          phone: "(555) 555-5555",
+          website: "https://example.com",
+          googleReviewLink: "https://google.com",
+          hours: "Mon-Fri: 9:00 AM - 5:00 PM",
+          socials: {
+            facebook: "https://facebook.com",
+            instagram: "https://instagram.com",
+            twitter: "https://twitter.com",
+            linkedin: "https://linkedin.com"
+          },
+          userId: firebaseUser.uid
+        };
+        await setDoc(doc(db, "businesses", firebaseUser.uid), defaultProfile);
+      }
+
+      onLogin(appUser);
+    } catch (err: any) {
+      console.error("Google Auth error:", err);
+      setError(err.message || "Failed to sign in with Google.");
+    } finally {
       setIsLoading(false);
-    }, 800);
+    }
   };
 
   return (
@@ -172,7 +317,7 @@ export default function Auth({ onLogin }: AuthProps) {
                       <input
                         id="signup-name-input"
                         type="text"
-                        required
+                        required={!isLogin}
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         placeholder="Sarah Jenkins"
@@ -192,7 +337,7 @@ export default function Auth({ onLogin }: AuthProps) {
                       <input
                         id="signup-business-input"
                         type="text"
-                        required
+                        required={!isLogin}
                         value={businessName}
                         onChange={(e) => setBusinessName(e.target.value)}
                         placeholder="Sweet Bites Bakery"
@@ -318,10 +463,16 @@ export default function Auth({ onLogin }: AuthProps) {
         </motion.div>
 
         {isLogin && !forgotPasswordMode && (
-          <div className="mt-4 text-center">
-            <span className="text-xs text-zinc-500">
-              Demo credentials: <span className="font-mono text-emerald-400 font-bold">owner@sweetbites.com</span> / <span className="font-mono text-emerald-400 font-bold">password123</span>
-            </span>
+          <div className="mt-4 text-center space-y-3">
+            {onAdminAccess && (
+              <button
+                type="button"
+                onClick={onAdminAccess}
+                className="inline-flex items-center space-x-1.5 text-xs text-emerald-400 font-semibold hover:text-emerald-300 transition-colors uppercase tracking-wider bg-emerald-950/20 border border-emerald-900/40 py-1.5 px-4 rounded-xl cursor-pointer"
+              >
+                <span>🔐 Access Super Admin Panel</span>
+              </button>
+            )}
           </div>
         )}
       </div>

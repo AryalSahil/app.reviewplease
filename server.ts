@@ -59,7 +59,12 @@ app.get("/api/health", (req, res) => {
 
 // 1. Generate AI Review suggestions
 app.post("/api/gemini/suggest-reviews", async (req, res) => {
+  const plan = (req.headers["x-user-plan"] as string) || "Free";
   const { rating, tone, length, language, extraDetails, businessName } = req.body;
+
+  // Free Tier constraints: English only, friendly tone only
+  const forcedLanguage = plan === "Free" ? "English" : (language || "English");
+  const forcedTone = plan === "Free" ? "friendly" : (tone || "friendly");
 
   const bName = businessName || "our business";
   const starsStr = `${rating || 5} out of 5 stars`;
@@ -67,9 +72,9 @@ app.post("/api/gemini/suggest-reviews", async (req, res) => {
   const prompt = `You are an AI assistant helping a customer write a Google Review for the business "${bName}". 
 Generate exactly 3 diverse, natural-sounding, realistic customer review suggestions based on the following:
 - Star Rating: ${starsStr}
-- Tone: ${tone || "friendly"}
+- Tone: ${forcedTone}
 - Length limit: ${length || "medium"} length (short is 1-2 sentences, medium is 3-4 sentences, long is a full paragraph)
-- Language: ${language || "English"}
+- Language: ${forcedLanguage}
 - Extra context/details: ${extraDetails || "Excellent customer service and highly recommended."}
 
 Return the response in JSON array format containing exactly 3 strings representing the reviews. Do not include markdown block formatting (like \`\`\`json). Just return the raw JSON array of strings:
@@ -116,18 +121,23 @@ Return the response in JSON array format containing exactly 3 strings representi
 
 // 2. Rewrite review
 app.post("/api/gemini/rewrite-review", async (req, res) => {
+  const plan = (req.headers["x-user-plan"] as string) || "Free";
   const { text, tone, length, language } = req.body;
 
   if (!text) {
     return res.status(400).json({ error: "Text is required for rewriting" });
   }
 
+  // Free Tier constraints: English only, friendly tone only
+  const forcedLanguage = plan === "Free" ? "English" : (language || "English");
+  const forcedTone = plan === "Free" ? "friendly" : (tone || "professional");
+
   const prompt = `Rewrite the following customer review to make it sound premium and professional:
 Review: "${text}"
 Desired properties:
-- Tone: ${tone || "professional"}
+- Tone: ${forcedTone}
 - Length: ${length || "medium"} (short: 1-2 sentences, medium: 3-4 sentences, long: full paragraph)
-- Target Language: ${language || "English"}
+- Target Language: ${forcedLanguage}
 
 Return only the rewritten review text. Do not wrap it in quotes, do not add prefixes like "Here is the rewritten review:". Just return the rewritten text directly.`;
 
@@ -143,6 +153,15 @@ Return only the rewritten review text. Do not wrap it in quotes, do not add pref
 
 // 3. Generate Reply to review
 app.post("/api/gemini/generate-reply", async (req, res) => {
+  const plan = (req.headers["x-user-plan"] as string) || "Free";
+  
+  // Strict check: No AI replies for Free plan accounts on the backend
+  if (plan === "Free") {
+    return res.status(403).json({ 
+      error: "AI Replies are restricted to PRO plan accounts. Please upgrade to unlock replies." 
+    });
+  }
+
   const { reviewText, reviewerName, rating, tone, businessName } = req.body;
 
   const bName = businessName || "our business";

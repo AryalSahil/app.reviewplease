@@ -1,0 +1,90 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User account registration and role metadata",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "businessName": { "type": "string" },
+        "avatar": { "type": "string" },
+        "plan": { "type": "string" },
+        "role": { "type": "string" }
+      },
+      "required": ["id", "email", "name", "role"]
+    },
+    "BusinessProfile": {
+      "title": "BusinessProfile",
+      "description": "Business profile branding, details, and social links",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "logo": { "type": "string" },
+        "category": { "type": "string" },
+        "address": { "type": "string" },
+        "phone": { "type": "string" },
+        "website": { "type": "string" },
+        "googleReviewLink": { "type": "string" },
+        "hours": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["id", "name", "userId"]
+    },
+    "QRCodeItem": {
+      "title": "QRCodeItem",
+      "description": "Dynamic QR code placement and configuration details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "url": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "scans": { "type": "integer" },
+        "ratingRequired": { "type": "integer" },
+        "status": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["id", "name", "url", "userId"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "Google reviews and direct feedback reviews",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "author": { "type": "string" },
+        "avatar": { "type": "string" },
+        "rating": { "type": "integer" },
+        "text": { "type": "string" },
+        "response": { "type": "string" },
+        "date": { "type": "string" },
+        "source": { "type": "string" },
+        "location": { "type": "string" },
+        "status": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["id", "author", "rating", "text", "userId"]
+    }
+  },
+  "firestore": {
+    "users": {
+      "schema": "User",
+      "description": "A collection of registered tenant user accounts"
+    },
+    "businesses": {
+      "schema": "BusinessProfile",
+      "description": "A collection of business profiles mapped to users"
+    },
+    "qrcodes": {
+      "schema": "QRCodeItem",
+      "description": "A collection of generated review QR codes mapped to users"
+    },
+    "reviews": {
+      "schema": "Review",
+      "description": "A collection of customer reviews mapped to users"
+    }
+  }
+}

@@ -36,8 +36,31 @@ import { Share2, Printer, Palette, BarChart2, Lock as LockIcon, Unlock as Unlock
 import Auth from "./components/Auth";
 import Sidebar, { ActiveSection } from "./components/Sidebar";
 import QRReviewPortal from "./components/QRReviewPortal";
+import ProLockOverlay from "./components/ProLockOverlay";
 import ThemeBuilder from "./components/ThemeBuilder";
 import PublicReviewPage from "./components/PublicReviewPage";
+import SuperAdminPanel from "./components/SuperAdminPanel";
+import SystemHealth from "./components/SystemHealth";
+import { 
+  auth, 
+  db, 
+  signOut,
+  collection, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  getDocs,
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  where, 
+  orderBy, 
+  addDoc,
+  OperationType,
+  handleFirestoreError
+} from "./lib/firebase";
+import { onAuthStateChanged } from "firebase/auth";
 import { 
   User, 
   BusinessProfile, 
@@ -80,7 +103,21 @@ export default function App() {
   // Master lists
   const [qrCodes, setQRCodes] = useState<QRCodeItem[]>(() => {
     const saved = localStorage.getItem("reviewplease_qrcodes");
-    return saved ? JSON.parse(saved) : initialQRCodes;
+    const list: QRCodeItem[] = saved ? JSON.parse(saved) : initialQRCodes;
+    return list.map(q => {
+      let slug = "";
+      if (q.url) {
+        const parts = q.url.split("/");
+        slug = parts[parts.length - 1];
+      }
+      if (!slug || slug === "r" || slug === "review" || slug.startsWith("http")) {
+        slug = q.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
+      }
+      return {
+        ...q,
+        url: `${window.location.origin}/r/${slug}`
+      };
+    });
   });
 
   const [reviews, setReviews] = useState<Review[]>(() => {
@@ -108,12 +145,78 @@ export default function App() {
     return saved ? JSON.parse(saved) : initialBilling;
   });
 
+  // Public route loading states
+  const pathnameTmp = window.location.pathname;
+  const isPublicRouteTmp = pathnameTmp.startsWith("/r/") || pathnameTmp.startsWith("/review/");
+  const [publicQR, setPublicQR] = useState<QRCodeItem | null>(null);
+  const [publicProfile, setPublicProfile] = useState<BusinessProfile | null>(null);
+  const [loadingPublic, setLoadingPublic] = useState(isPublicRouteTmp);
+
   // App metrics & UI Controls
   const [activeSection, setActiveSection] = useState<ActiveSection>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [notificationDropdownOpen, setNotificationDropdownOpen] = useState(false);
   const [aiUsageCredits, setAiUsageCredits] = useState(84); // out of 100
+
+  // Super Admin Mode State
+  const [isSuperAdminMode, setIsSuperAdminMode] = useState(false);
+
+  const handleAdminImpersonate = (businessName: string) => {
+    let category = "Local Store";
+    let website = "https://example.com";
+    let phone = "(555) 019-2834";
+    let logo = "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&q=80&w=120";
+    let plan: "Free" | "Pro" | "Enterprise" = "Pro";
+
+    if (businessName === "Golden Gate Gym") {
+      category = "Fitness & Health";
+      website = "https://www.goldengategym.com";
+      phone = "(415) 555-2019";
+      logo = "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&q=80&w=120";
+      plan = "Enterprise";
+    } else if (businessName === "Apex Dental Care") {
+      category = "Medical & Dental";
+      website = "https://www.apexdental.com";
+      phone = "(415) 555-4029";
+      logo = "https://images.unsplash.com/photo-1629909613654-28e377c37b09?auto=format&fit=crop&q=80&w=120";
+      plan = "Pro";
+    } else if (businessName === "Bella Italia Bistro") {
+      category = "Restaurant & Dining";
+      website = "https://www.bellaitalia.com";
+      phone = "(415) 555-0192";
+      logo = "https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&q=80&w=120";
+      plan = "Free";
+    }
+
+    setBusinessProfile({
+      name: businessName,
+      logo,
+      category,
+      address: "100 SaaS Blvd, Suite 200, San Francisco, CA 94107",
+      phone,
+      website,
+      googleReviewLink: `https://g.page/r/${businessName.toLowerCase().replace(/[^a-z0-9]/g, "-")}/review`,
+      hours: "Mon-Fri: 9:00 AM - 8:00 PM",
+      socials: {
+        facebook: "https://facebook.com",
+        instagram: "https://instagram.com",
+        twitter: "https://twitter.com",
+        linkedin: "https://linkedin.com"
+      }
+    });
+
+    setUser({
+      id: "usr_impersonate_" + Math.random().toString(36).substr(2, 5),
+      email: `${businessName.toLowerCase().replace(/[^a-z0-9]/g, "")}@example.com`,
+      name: "Impersonated Tenant",
+      businessName,
+      plan,
+      role: "Owner"
+    });
+
+    setIsSuperAdminMode(false);
+  };
 
   // Filter States for Reviews screen
   const [reviewFilterRating, setReviewFilterRating] = useState<number | "All">("All");
@@ -148,6 +251,7 @@ export default function App() {
 
   // QR Management Popups
   const [newQRModalOpen, setNewQRModalOpen] = useState(false);
+  const [showAllQRFlyer, setShowAllQRFlyer] = useState(false);
   const [newQRName, setNewQRName] = useState("");
   const [newQRRequiredRating, setNewQRRequiredRating] = useState(4);
   const [selectedQRForPoster, setSelectedQRForPoster] = useState<QRCodeItem | null>(null);
@@ -212,35 +316,226 @@ export default function App() {
     localStorage.setItem("reviewplease_billing", JSON.stringify(billing));
   }, [billing]);
 
+  // Listen for Firebase Auth changes
+  useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        setUser(null);
+        return;
+      }
+
+      // Fetch user profile from Firestore
+      try {
+        const userRef = doc(db, "users", firebaseUser.uid);
+        const userSnap = await getDoc(userRef);
+
+        if (userSnap.exists()) {
+          const uData = userSnap.data() as User;
+          setUser(uData);
+        } else {
+          const isDefaultAdmin = firebaseUser.email === "admin@reviewplease.ai" || firebaseUser.email === "sahil265064@gmail.com";
+          const fallbackUser: User = {
+            id: firebaseUser.uid,
+            email: firebaseUser.email || "",
+            name: firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "User",
+            businessName: "My Business",
+            avatar: firebaseUser.photoURL || "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=120",
+            plan: "Pro",
+            role: isDefaultAdmin ? "Admin" : "Owner"
+          };
+          await setDoc(userRef, fallbackUser);
+          setUser(fallbackUser);
+        }
+      } catch (e) {
+        console.error("Error fetching or initializing user profile:", e);
+      }
+    });
+
+    return () => unsubscribeAuth();
+  }, []);
+
+  // Listen for Firestore dynamic tenant collection snapshots
+  useEffect(() => {
+    if (!user) {
+      // Clear tenant-specific states upon sign out to isolate memory boundaries
+      setQRCodes([]);
+      setReviews([]);
+      setTeam([]);
+      setActivityLogs([]);
+      setNotifications([]);
+      setBilling([]);
+      return;
+    }
+
+    // 1. Business Profile Snap
+    const unsubBusiness = onSnapshot(doc(db, "businesses", user.id), (snap) => {
+      if (snap.exists()) {
+        setBusinessProfile(snap.data() as BusinessProfile);
+      } else {
+        // Seed initial business profile document
+        const newProfile: BusinessProfile = {
+          name: user.businessName || "My Business",
+          logo: "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&q=80&w=120",
+          category: "Retail Business",
+          address: "128 Gourmet Ave, Suite A, San Francisco, CA 94107",
+          phone: "(415) 555-8931",
+          website: "https://example.com",
+          googleReviewLink: "https://g.page/r/review",
+          hours: "Mon-Sat: 7:00 AM - 6:00 PM",
+          socials: {
+            facebook: "https://facebook.com",
+            instagram: "https://instagram.com",
+            twitter: "https://twitter.com",
+            linkedin: "https://linkedin.com"
+          }
+        };
+        setDoc(doc(db, "businesses", user.id), { ...newProfile, userId: user.id })
+          .catch((e) => console.error("Failed to seed initial business profile:", e));
+      }
+    });
+
+    // 2. QR Codes List Snap
+    const unsubQRCodes = onSnapshot(
+      query(collection(db, "qrcodes"), where("userId", "==", user.id)),
+      (snap) => {
+        const list: QRCodeItem[] = [];
+        snap.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() } as QRCodeItem);
+        });
+        setQRCodes(list);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, "qrcodes")
+    );
+
+    // 3. Reviews List Snap
+    const unsubReviews = onSnapshot(
+      query(collection(db, "reviews"), where("userId", "==", user.id)),
+      (snap) => {
+        const list: Review[] = [];
+        snap.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() } as Review);
+        });
+        setReviews(list);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, "reviews")
+    );
+
+    // 4. Team Members Snap
+    const unsubTeam = onSnapshot(
+      query(collection(db, "team"), where("userId", "==", user.id)),
+      (snap) => {
+        const list: TeamMember[] = [];
+        snap.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() } as TeamMember);
+        });
+        setTeam(list);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, "team")
+    );
+
+    // 5. Activity Logs Snap
+    const unsubLogs = onSnapshot(
+      query(collection(db, "activity_logs"), where("userId", "==", user.id)),
+      (snap) => {
+        const list: ActivityLog[] = [];
+        snap.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() } as ActivityLog);
+        });
+        // Sort logs in reverse chronological order
+        list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        setActivityLogs(list);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, "activity_logs")
+    );
+
+    // 6. Notifications Snap
+    const unsubNotifications = onSnapshot(
+      query(collection(db, "notifications"), where("userId", "==", user.id)),
+      (snap) => {
+        const list: NotificationItem[] = [];
+        snap.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() } as NotificationItem);
+        });
+        list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        setNotifications(list);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, "notifications")
+    );
+
+    // 7. Billing Invoices Snap
+    const unsubBilling = onSnapshot(
+      query(collection(db, "billing"), where("userId", "==", user.id)),
+      (snap) => {
+        const list: BillingInvoice[] = [];
+        snap.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() } as BillingInvoice);
+        });
+        setBilling(list);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, "billing")
+    );
+
+    return () => {
+      unsubBusiness();
+      unsubQRCodes();
+      unsubReviews();
+      unsubTeam();
+      unsubLogs();
+      unsubNotifications();
+      unsubBilling();
+    };
+  }, [user]);
+
   // Auth handler
   const handleLogin = (newUser: User) => {
     setUser(newUser);
     addLog("User Signed In", `Sarah Jenkins successfully logged into review please console.`, "success");
   };
 
-  const handleLogout = () => {
-    setUser(null);
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setUser(null);
+    } catch (e) {
+      console.error("Logout failed:", e);
+    }
   };
 
   // Utility to log activities
-  const addLog = (action: string, details: string, type: "info" | "success" | "warning" | "error" | "ai" = "info") => {
-    const newLog: ActivityLog = {
-      id: "act_" + Math.random().toString(36).substr(2, 9),
-      user: user?.name || "System",
-      action,
-      details,
-      time: "Just now",
-      type: type as any
-    };
-    setActivityLogs(prev => [newLog, ...prev.slice(0, 19)]);
+  const addLog = async (action: string, details: string, type: "info" | "success" | "warning" | "error" | "ai" = "info") => {
+    if (!user) return;
+    try {
+      const logId = "act_" + Math.random().toString(36).substr(2, 9);
+      const newLog = {
+        user: user.name || "System",
+        action,
+        details,
+        time: "Just now",
+        timestamp: Date.now(),
+        type: type,
+        userId: user.id
+      };
+      await setDoc(doc(db, "activity_logs", logId), newLog);
+    } catch (e) {
+      console.error("Failed to append activity log document in database", e);
+    }
   };
 
   // Count unread notifications
   const unreadCount = notifications.filter(n => !n.read).length;
 
-  const markAllNotificationsAsRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-    addLog("Marked Read", "All pending alert notifications cleared.", "info");
+  const markAllNotificationsAsRead = async () => {
+    if (!user) return;
+    try {
+      for (const n of notifications) {
+        if (!n.read) {
+          await updateDoc(doc(db, "notifications", n.id), { read: true });
+        }
+      }
+      addLog("Marked Read", "All pending alert notifications cleared.", "info");
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, "notifications");
+    }
   };
 
   const handleGenerateAISuggestions = async () => {
@@ -248,7 +543,10 @@ export default function App() {
     try {
       const response = await fetch("/api/gemini/suggest-reviews", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "X-User-Plan": user?.plan || "Free"
+        },
         body: JSON.stringify({
           rating: aiAssistantRating,
           tone: aiAssistantTone,
@@ -278,7 +576,10 @@ export default function App() {
     try {
       const response = await fetch("/api/gemini/rewrite-review", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "X-User-Plan": user?.plan || "Free"
+        },
         body: JSON.stringify({
           text: aiRewriteInput,
           tone: aiAssistantTone,
@@ -305,7 +606,10 @@ export default function App() {
     try {
       const response = await fetch("/api/gemini/generate-reply", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "X-User-Plan": user?.plan || "Free"
+        },
         body: JSON.stringify({
           reviewText: selectedReviewForReply.text,
           reviewerName: selectedReviewForReply.author,
@@ -314,6 +618,13 @@ export default function App() {
           businessName: businessProfile.name
         })
       });
+      
+      if (response.status === 403) {
+        const errorData = await response.json();
+        alert(errorData.error || "AI Replies are restricted to PRO plan accounts.");
+        return;
+      }
+
       const data = await response.json();
       if (data.reply) {
         setAiReplyDraft(data.reply);
@@ -327,102 +638,122 @@ export default function App() {
     }
   };
 
-  const saveReplyToReview = () => {
+  const saveReplyToReview = async () => {
     if (!selectedReviewForReply || !aiReplyDraft.trim()) return;
-    setReviews(prev => prev.map(r => {
-      if (r.id === selectedReviewForReply.id) {
-        return {
-          ...r,
-          response: aiReplyDraft,
-          status: "replied"
-        };
-      }
-      return r;
-    }));
-    addLog("Review Reply Published", `Replied successfully to customer ${selectedReviewForReply.author}.`, "success");
-    // Clear and update current review item state
-    setSelectedReviewForReply(null);
-    setAiReplyDraft("");
+    try {
+      await updateDoc(doc(db, "reviews", selectedReviewForReply.id), {
+        response: aiReplyDraft,
+        status: "replied"
+      });
+      addLog("Review Reply Published", `Replied successfully to customer ${selectedReviewForReply.author}.`, "success");
+      setSelectedReviewForReply(null);
+      setAiReplyDraft("");
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `reviews/${selectedReviewForReply.id}`);
+    }
   };
 
-  const handleCreateQRCode = (e: React.FormEvent) => {
+  const handleCreateQRCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newQRName.trim()) return;
+    if (!newQRName.trim() || !user) return;
     
     // Pro Tier has unlimited QR codes. Free is limited to 3. 
-    if (user?.plan === "Free" && qrCodes.length >= 3) {
+    if (user.plan === "Free" && qrCodes.length >= 3) {
       alert("Upgrade to PRO to generate unlimited dynamic QR Codes.");
       return;
     }
 
-    const uniqueSlug = newQRName.toLowerCase().replace(/[^a-z0-9]/g, "-");
-    const newQR: QRCodeItem = {
-      id: "qr_" + Math.random().toString(36).substr(2, 9),
-      name: newQRName,
-      url: `https://reviewplease.ai/r/${uniqueSlug}`,
-      createdAt: new Date().toISOString().split("T")[0],
-      scans: 0,
-      ratingRequired: newQRRequiredRating,
-      status: "Active"
-    };
+    try {
+      const uniqueSlug = newQRName.toLowerCase().replace(/[^a-z0-9]/g, "-") + "-" + Math.random().toString(36).substr(2, 4);
+      const qrId = "qr_" + Math.random().toString(36).substr(2, 9);
+      const newQR: any = {
+        name: newQRName,
+        url: `${window.location.origin}/r/${uniqueSlug}`,
+        createdAt: new Date().toISOString().split("T")[0],
+        scans: 0,
+        ratingRequired: newQRRequiredRating,
+        status: "Active",
+        userId: user.id
+      };
 
-    setQRCodes(prev => [...prev, newQR]);
-    setNewQRName("");
-    setNewQRModalOpen(false);
-    addLog("QR Code Created", `Generated dynamic URL matching counter/location for: ${newQRName}`, "success");
-  };
-
-  const handleDeleteQR = (id: string) => {
-    setQRCodes(prev => prev.filter(q => q.id !== id));
-    addLog("QR Code Deleted", `Removed dynamic destination setup for ID: ${id}`, "warning");
-  };
-
-  const handleRegenerateQR = (id: string) => {
-    setQRCodes(prev => prev.map(q => {
-      if (q.id === id) {
-        const newSlug = Math.random().toString(36).substr(2, 5);
-        return {
-          ...q,
-          url: `https://reviewplease.ai/r/sb-${newSlug}`
-        };
-      }
-      return q;
-    }));
-    addLog("QR Code Regenerated", `Created fresh random routing slug for QR ID: ${id}`, "info");
-  };
-
-  const handleInviteTeamMember = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inviteName.trim() || !inviteEmail.trim()) return;
-
-    const newMember: TeamMember = {
-      id: "team_" + Math.random().toString(36).substr(2, 9),
-      name: inviteName,
-      email: inviteEmail,
-      role: inviteRole,
-      status: "Pending",
-      joinedAt: new Date().toISOString().split("T")[0]
-    };
-
-    setTeam(prev => [...prev, newMember]);
-    setInviteName("");
-    setInviteEmail("");
-    addLog("Team Member Invited", `Sent verification invitation to: ${inviteEmail} with ${inviteRole} privileges.`, "success");
-  };
-
-  const handleUpgradePlan = () => {
-    if (user) {
-      const updated = { ...user, plan: "Enterprise" as const };
-      setUser(updated);
-      addLog("Subscription Upgraded", "Upgraded to Enterprise tier. Unlimited QR, custom API keys unlocked.", "success");
+      await setDoc(doc(db, "qrcodes", qrId), newQR);
+      setNewQRName("");
+      setNewQRModalOpen(false);
+      addLog("QR Code Created", `Generated dynamic URL matching counter/location for: ${newQRName}`, "success");
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, "qrcodes");
     }
   };
 
-  const handleDowngradePlan = () => {
+  const handleDeleteQR = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, "qrcodes", id));
+      addLog("QR Code Deleted", `Removed dynamic destination setup for ID: ${id}`, "warning");
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, `qrcodes/${id}`);
+    }
+  };
+
+  const handleRegenerateQR = async (id: string) => {
+    try {
+      const qrRef = doc(db, "qrcodes", id);
+      const qrSnap = await getDoc(qrRef);
+      if (qrSnap.exists()) {
+        const qrData = qrSnap.data();
+        const uniqueSlug = qrData.name.toLowerCase().replace(/[^a-z0-9]/g, "-") + "-" + Math.random().toString(36).substr(2, 4);
+        await updateDoc(qrRef, {
+          url: `${window.location.origin}/r/${uniqueSlug}`
+        });
+        addLog("QR Code Regenerated", `Created fresh random routing slug for QR ID: ${id}`, "info");
+      }
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `qrcodes/${id}`);
+    }
+  };
+
+  const handleInviteTeamMember = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inviteName.trim() || !inviteEmail.trim() || !user) return;
+
+    try {
+      const memberId = "team_" + Math.random().toString(36).substr(2, 9);
+      const newMember = {
+        name: inviteName,
+        email: inviteEmail,
+        role: inviteRole,
+        status: "Pending",
+        joinedAt: new Date().toISOString().split("T")[0],
+        userId: user.id
+      };
+
+      await setDoc(doc(db, "team", memberId), newMember);
+      setInviteName("");
+      setInviteEmail("");
+      addLog("Team Member Invited", `Sent verification invitation to: ${inviteEmail} with ${inviteRole} privileges.`, "success");
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, "team");
+    }
+  };
+
+  const handleUpgradePlan = async () => {
     if (user) {
-      const updated = { ...user, plan: "Free" as const };
-      setUser(updated);
-      addLog("Subscription Cancelled", "Downgraded to Free Tier. Limitations apply.", "warning");
+      try {
+        await updateDoc(doc(db, "users", user.id), { plan: "Enterprise" });
+        addLog("Subscription Upgraded", "Upgraded to Enterprise tier. Unlimited QR, custom API keys unlocked.", "success");
+      } catch (e) {
+        handleFirestoreError(e, OperationType.UPDATE, `users/${user.id}`);
+      }
+    }
+  };
+
+  const handleDowngradePlan = async () => {
+    if (user) {
+      try {
+        await updateDoc(doc(db, "users", user.id), { plan: "Free" });
+        addLog("Subscription Cancelled", "Downgraded to Free Tier. Limitations apply.", "warning");
+      } catch (e) {
+        handleFirestoreError(e, OperationType.UPDATE, `users/${user.id}`);
+      }
     }
   };
 
@@ -446,23 +777,93 @@ export default function App() {
   // Client-side Router mapping for QR Permanent Review Page URLs
   const pathname = window.location.pathname;
   const isPublicRoute = pathname.startsWith("/r/") || pathname.startsWith("/review/");
+
+  useEffect(() => {
+    if (isPublicRoute) {
+      const uniqueId = pathname.startsWith("/r/") 
+        ? pathname.split("/r/")[1] 
+        : pathname.split("/review/")[1];
+
+      if (uniqueId) {
+        const loadPublicData = async () => {
+          try {
+            const qrsSnap = await getDocs(collection(db, "qrcodes"));
+            let foundQR: any = null;
+            qrsSnap.forEach((doc) => {
+              const data = doc.data();
+              const qrId = doc.id;
+              const url = data.url || "";
+              const slug = url.split("/").pop() || "";
+              if (qrId === uniqueId || slug === uniqueId) {
+                foundQR = { id: qrId, ...data };
+              }
+            });
+
+            if (foundQR) {
+              setPublicQR(foundQR);
+              const bizSnap = await getDoc(doc(db, "businesses", foundQR.userId));
+              if (bizSnap.exists()) {
+                setPublicProfile(bizSnap.data() as BusinessProfile);
+              }
+            } else {
+              // Fallback to local profile if no cloud record is seeded yet
+              setPublicProfile(businessProfile);
+              setPublicQR({
+                id: uniqueId,
+                name: "Demo Location",
+                url: window.location.href,
+                createdAt: new Date().toISOString().split("T")[0],
+                scans: 10,
+                ratingRequired: 4,
+                status: "Active"
+              });
+            }
+          } catch (e) {
+            console.error("Error loading public review tenant data", e);
+            // Fallback safe defaults to ensure the app never crashes
+            setPublicProfile(businessProfile);
+          } finally {
+            setLoadingPublic(false);
+          }
+        };
+        loadPublicData();
+      }
+    }
+  }, [isPublicRoute, pathname]);
+
   if (isPublicRoute) {
+    if (loadingPublic) {
+      return (
+        <div className="min-h-screen bg-[#050505] flex flex-col justify-center items-center space-y-4">
+          <div className="h-8 w-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-xs text-zinc-500 font-mono tracking-widest uppercase">Loading review portal...</p>
+        </div>
+      );
+    }
+
     const uniqueId = pathname.startsWith("/r/") 
       ? pathname.split("/r/")[1] 
       : pathname.split("/review/")[1];
+
     if (uniqueId) {
       return (
         <PublicReviewPage
-          businessProfile={businessProfile}
-          qrCodes={qrCodes}
-          onAddReview={(newReview) => {
-            setReviews(prev => [newReview, ...prev]);
+          businessProfile={publicProfile || businessProfile}
+          qrCodes={publicQR ? [publicQR] : qrCodes}
+          onAddReview={async (newReview) => {
             try {
-              const savedReviews = localStorage.getItem("reviewplease_reviews");
-              const reviewsList = savedReviews ? JSON.parse(savedReviews) : [];
-              localStorage.setItem("reviewplease_reviews", JSON.stringify([newReview, ...reviewsList]));
+              const targetUserId = publicQR ? (publicQR as any).userId : (user ? user.id : "system");
+              const reviewId = "rev_" + Math.random().toString(36).substr(2, 9);
+              const payload = {
+                ...newReview,
+                userId: targetUserId
+              };
+              await setDoc(doc(db, "reviews", reviewId), payload);
+              
+              // Local log trigger
+              console.log("Successfully recorded public review in Firestore database.");
             } catch (e) {
-              console.error("Failed to persist new public review", e);
+              console.error("Failed to save public review to firestore:", e);
             }
           }}
           uniqueId={uniqueId}
@@ -471,9 +872,18 @@ export default function App() {
     }
   }
 
+  if (isSuperAdminMode) {
+    return (
+      <SuperAdminPanel
+        onExit={() => setIsSuperAdminMode(false)}
+        onImpersonate={handleAdminImpersonate}
+      />
+    );
+  }
+
   // If not logged in, render the login flow
   if (!user) {
-    return <Auth onLogin={handleLogin} />;
+    return <Auth onLogin={handleLogin} onAdminAccess={() => setIsSuperAdminMode(true)} />;
   }
 
   // Derived metrics
@@ -505,6 +915,7 @@ export default function App() {
         unreadCount={unreadCount}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        onAdminAccess={() => setIsSuperAdminMode(true)}
       />
 
       {/* Main Content Area */}
@@ -847,20 +1258,36 @@ export default function App() {
                     <h2 className="text-2xl font-serif text-white italic">QR Codes & Review Pages</h2>
                     <p className="text-xs text-zinc-500">Each permanent physical placement receives a unique permanent redirect URL and high-contrast dynamic QR flyer.</p>
                   </div>
-                  <button
-                    onClick={() => setNewQRModalOpen(true)}
-                    className="px-4 py-2.5 rounded-xl bg-white text-black text-xs font-bold hover:bg-zinc-200 transition-colors flex items-center space-x-2 self-start"
-                  >
-                    <Plus className="h-4 w-4" />
-                    <span>Generate New QR Page</span>
-                  </button>
+                  <div className="flex flex-wrap gap-3 self-start">
+                    <button
+                      onClick={() => setNewQRModalOpen(true)}
+                      className="px-4 py-2.5 rounded-xl bg-white text-black text-xs font-bold hover:bg-zinc-200 transition-colors flex items-center space-x-2"
+                    >
+                      <Plus className="h-4 w-4" />
+                      <span>Generate New QR Page</span>
+                    </button>
+                    <button
+                      onClick={() => setShowAllQRFlyer(true)}
+                      className="px-4 py-2.5 rounded-xl bg-[#0c0c0c] border border-zinc-800 text-zinc-300 text-xs font-semibold hover:text-white hover:border-zinc-700 transition-colors flex items-center space-x-2"
+                    >
+                      <Printer className="h-4 w-4 text-emerald-400 animate-pulse" />
+                      <span>Export All (A4 PDF Flyer)</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* QR Codes Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                   {qrCodes.map((qr) => {
-                    // Build a fully dynamic, correct local URL matching origin format
-                    const slug = qr.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
+                    // Build a fully dynamic, correct local URL matching origin format and preserving any specific slug
+                    let slug = "";
+                    if (qr.url) {
+                      const parts = qr.url.split("/");
+                      slug = parts[parts.length - 1];
+                    }
+                    if (!slug || slug === "r" || slug === "review" || slug.startsWith("http")) {
+                      slug = qr.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
+                    }
                     const liveReviewUrl = `${window.location.origin}/r/${slug}`;
                     // Keep local representation updated
                     qr.url = liveReviewUrl;
@@ -1139,21 +1566,51 @@ export default function App() {
                 <QRReviewPortal
                   qrCodes={qrCodes}
                   businessProfile={businessProfile}
-                  onAddReview={(review) => setReviews(prev => [review, ...prev])}
-                  onAddActivityLog={(action, details, type) => addLog(action, details, type)}
-                  onAddNotification={(title, description, type) => {
-                    const newNotif: any = {
-                      id: "notif_" + Math.random().toString(36).substr(2, 9),
-                      title,
-                      description,
-                      time: "Just now",
-                      type,
-                      read: false
-                    };
-                    setNotifications(prev => [newNotif, ...prev]);
+                  onAddReview={async (review) => {
+                    if (user) {
+                      try {
+                        const reviewId = review.id || "rev_" + Math.random().toString(36).substr(2, 9);
+                        await setDoc(doc(db, "reviews", reviewId), {
+                          ...review,
+                          userId: user.id
+                        });
+                      } catch (e) {
+                        handleFirestoreError(e, OperationType.WRITE, `reviews/${review.id}`);
+                      }
+                    }
                   }}
-                  onIncrementScanCount={(qrCodeId) => {
-                    setQRCodes(prev => prev.map(q => q.id === qrCodeId ? { ...q, scans: q.scans + 1 } : q));
+                  onAddActivityLog={(action, details, type) => addLog(action, details, type)}
+                  onAddNotification={async (title, description, type) => {
+                    if (user) {
+                      const notifId = "notif_" + Math.random().toString(36).substr(2, 9);
+                      try {
+                        await setDoc(doc(db, "notifications", notifId), {
+                          title,
+                          description,
+                          time: "Just now",
+                          type,
+                          read: false,
+                          userId: user.id,
+                          timestamp: Date.now()
+                        });
+                      } catch (e) {
+                        handleFirestoreError(e, OperationType.WRITE, `notifications/${notifId}`);
+                      }
+                    }
+                  }}
+                  onIncrementScanCount={async (qrCodeId) => {
+                    if (user) {
+                      try {
+                        const qrRef = doc(db, "qrcodes", qrCodeId);
+                        const qrSnap = await getDoc(qrRef);
+                        if (qrSnap.exists()) {
+                          const currentScans = qrSnap.data().scans || 0;
+                          await updateDoc(qrRef, { scans: currentScans + 1 });
+                        }
+                      } catch (e) {
+                        handleFirestoreError(e, OperationType.UPDATE, `qrcodes/${qrCodeId}`);
+                      }
+                    }
                   }}
                   selectedQRId={selectedSimulatedQRId || (qrCodes.length > 0 ? qrCodes[0].id : "")}
                   onSelectedQRIdChange={setSelectedSimulatedQRId}
@@ -1175,25 +1632,36 @@ export default function App() {
                   <p className="text-xs text-zinc-500">Fully customize your public-facing review portal's branding, colours, styles, and action buttons without coding.</p>
                 </div>
 
-                <ThemeBuilder
-                  businessProfile={businessProfile}
-                  qrCodes={qrCodes}
-                  onAddActivityLog={(action, details, type) => addLog(action, details, type)}
-                  onAddNotification={(title, description, type) => {
-                    const newNotif: any = {
-                      id: "notif_" + Math.random().toString(36).substr(2, 9),
-                      title,
-                      description,
-                      time: "Just now",
-                      type,
-                      read: false
-                    };
-                    setNotifications(prev => [newNotif, ...prev]);
-                  }}
-                  onUpdateQRUrl={(qrId, newUrl) => {
-                    setQRCodes(prev => prev.map(q => q.id === qrId ? { ...q, url: newUrl } : q));
-                  }}
-                />
+                {user && user.plan === "Free" ? (
+                  <ProLockOverlay
+                    user={user}
+                    featureName="Theme Builder & Custom Branding"
+                    onUpgradeSuccess={(newPlan) => {
+                      setUser(prev => prev ? { ...prev, plan: newPlan } : null);
+                      addLog("Account Upgraded", "Successfully activated Premium Pro subscription!", "success");
+                    }}
+                  />
+                ) : (
+                  <ThemeBuilder
+                    businessProfile={businessProfile}
+                    qrCodes={qrCodes}
+                    onAddActivityLog={(action, details, type) => addLog(action, details, type)}
+                    onAddNotification={(title, description, type) => {
+                      const newNotif: any = {
+                        id: "notif_" + Math.random().toString(36).substr(2, 9),
+                        title,
+                        description,
+                        time: "Just now",
+                        type,
+                        read: false
+                      };
+                      setNotifications(prev => [newNotif, ...prev]);
+                    }}
+                    onUpdateQRUrl={(qrId, newUrl) => {
+                      setQRCodes(prev => prev.map(q => q.id === qrId ? { ...q, url: newUrl } : q));
+                    }}
+                  />
+                )}
               </motion.div>
             )}
 
@@ -1568,130 +2036,141 @@ export default function App() {
                   <p className="text-xs text-zinc-500">Draft responses directly targeting customer keywords to publish instantly on Google Business profiles.</p>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  
-                  {/* Pending review selector */}
-                  <div className="bg-[#0c0c0c] border border-[#1a1a1a] rounded-2xl p-6 space-y-4">
-                    <h4 className="text-xs font-semibold text-white uppercase tracking-widest font-mono">Select Review to Reply</h4>
-                    <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
-                      {reviews.map(rev => (
-                        <div 
-                          key={rev.id} 
-                          onClick={() => {
-                            setSelectedReviewForReply(rev);
-                            setAiReplyDraft("");
-                          }}
-                          className={`p-3 rounded-xl border text-left cursor-pointer transition-colors ${
-                            selectedReviewForReply?.id === rev.id 
-                              ? "bg-emerald-950/10 border-emerald-900/60" 
-                              : "bg-[#050505] border-[#1a1a1a] hover:bg-[#111]"
-                          }`}
-                        >
-                          <div className="flex justify-between text-[11px]">
-                            <span className="font-semibold text-white">{rev.author}</span>
-                            <span className="text-zinc-500 font-mono text-[9px]">{rev.date}</span>
+                {user && user.plan === "Free" ? (
+                  <ProLockOverlay
+                    user={user}
+                    featureName="AI Professional Reply Generator"
+                    onUpgradeSuccess={(newPlan) => {
+                      setUser(prev => prev ? { ...prev, plan: newPlan } : null);
+                      addLog("Account Upgraded", "Successfully activated Premium Pro subscription!", "success");
+                    }}
+                  />
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    
+                    {/* Pending review selector */}
+                    <div className="bg-[#0c0c0c] border border-[#1a1a1a] rounded-2xl p-6 space-y-4">
+                      <h4 className="text-xs font-semibold text-white uppercase tracking-widest font-mono">Select Review to Reply</h4>
+                      <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+                        {reviews.map(rev => (
+                          <div 
+                            key={rev.id} 
+                            onClick={() => {
+                              setSelectedReviewForReply(rev);
+                              setAiReplyDraft("");
+                            }}
+                            className={`p-3 rounded-xl border text-left cursor-pointer transition-colors ${
+                              selectedReviewForReply?.id === rev.id 
+                                ? "bg-emerald-950/10 border-emerald-900/60" 
+                                : "bg-[#050505] border-[#1a1a1a] hover:bg-[#111]"
+                            }`}
+                          >
+                            <div className="flex justify-between text-[11px]">
+                              <span className="font-semibold text-white">{rev.author}</span>
+                              <span className="text-zinc-500 font-mono text-[9px]">{rev.date}</span>
+                            </div>
+                            <div className="flex text-amber-500 text-[9px] my-1">
+                              {Array.from({ length: rev.rating }).map((_, i) => "★")}
+                            </div>
+                            <p className="text-[10px] text-zinc-400 truncate-2-lines mt-1">{rev.text}</p>
+                            <div className="flex justify-between items-center mt-2 pt-2 border-t border-[#1a1a1a]/40">
+                              <span className="text-[9px] text-zinc-500 font-mono uppercase">{rev.source}</span>
+                              <span className={`text-[9px] font-bold ${rev.status === "replied" ? "text-zinc-500" : "text-emerald-400"}`}>
+                                {rev.status === "replied" ? "✓ Replied" : "● Needs Reply"}
+                              </span>
+                            </div>
                           </div>
-                          <div className="flex text-amber-500 text-[9px] my-1">
-                            {Array.from({ length: rev.rating }).map((_, i) => "★")}
-                          </div>
-                          <p className="text-[10px] text-zinc-400 truncate-2-lines mt-1">{rev.text}</p>
-                          <div className="flex justify-between items-center mt-2 pt-2 border-t border-[#1a1a1a]/40">
-                            <span className="text-[9px] text-zinc-500 font-mono uppercase">{rev.source}</span>
-                            <span className={`text-[9px] font-bold ${rev.status === "replied" ? "text-zinc-500" : "text-emerald-400"}`}>
-                              {rev.status === "replied" ? "✓ Replied" : "● Needs Reply"}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Reply Draft Workspace */}
-                  <div className="lg:col-span-2 bg-[#0c0c0c] border border-[#1a1a1a] rounded-2xl p-6 space-y-5">
-                    {selectedReviewForReply ? (
-                      <>
-                        <div className="bg-[#050505] p-4 rounded-xl border border-[#1a1a1a]">
-                          <span className="text-[9px] text-zinc-500 font-semibold uppercase tracking-widest block mb-2">Original customer voice</span>
-                          <div className="flex justify-between items-start">
-                            <span className="text-xs font-semibold text-white">{selectedReviewForReply.author} ({selectedReviewForReply.rating} Stars)</span>
-                            <span className="text-[10px] font-mono text-zinc-500">{selectedReviewForReply.location}</span>
-                          </div>
-                          <p className="text-xs text-zinc-400 italic mt-2">"{selectedReviewForReply.text}"</p>
-                        </div>
-
-                        {/* Tone settings for replies */}
-                        <div className="space-y-2">
-                          <label className="block text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">Configure Response Tone</label>
-                          <div className="flex space-x-2">
-                            {(["friendly", "professional", "casual"] as const).map(t => (
-                              <button
-                                key={t}
-                                onClick={() => setAiReplyTone(t)}
-                                className={`flex-1 py-1.5 rounded-lg text-xs capitalize transition-colors border ${
-                                  aiReplyTone === t 
-                                    ? "bg-emerald-950/20 text-emerald-400 border-emerald-900/40" 
-                                    : "bg-[#050505] text-zinc-500 border-[#1a1a1a]"
-                                }`}
-                              >
-                                {t} Response
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* Draft block */}
-                        <div>
-                          <div className="flex justify-between items-center mb-1.5">
-                            <label className="block text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">AI Generated reply draft</label>
-                            <button
-                              onClick={handleGenerateReply}
-                              disabled={aiReplyLoading}
-                              className="text-[10px] text-emerald-400 hover:underline flex items-center space-x-1"
-                            >
-                              <Sparkles className="w-3 h-3" />
-                              <span>{aiReplyDraft ? "Regenerate alternative" : "Auto-Generate Draft"}</span>
-                            </button>
-                          </div>
-                          <textarea
-                            rows={4}
-                            value={aiReplyDraft}
-                            onChange={(e) => setAiReplyDraft(e.target.value)}
-                            placeholder="Draft reply content directly or trigger AI to write it."
-                            className="w-full bg-[#050505] border border-[#1a1a1a] text-xs text-white placeholder-zinc-700 rounded-lg p-3 focus:outline-none focus:ring-1 focus:ring-emerald-500 leading-relaxed"
-                          />
-                        </div>
-
-                        <div className="flex justify-between items-center pt-3 border-t border-[#1a1a1a]/40">
-                          <span className="text-[10px] text-zinc-500">Note: Saving publishes directly to sync profiles.</span>
-                          <div className="flex space-x-2">
-                            {aiReplyDraft && (
-                              <button
-                                onClick={() => handleCopyText(aiReplyDraft, 999)}
-                                className="px-3.5 py-2 rounded-lg border border-[#333] bg-[#050505] text-xs text-zinc-300 font-semibold hover:text-white transition-colors"
-                              >
-                                Copy reply
-                              </button>
-                            )}
-                            <button
-                              onClick={saveReplyToReview}
-                              disabled={!aiReplyDraft.trim()}
-                              className="px-4 py-2 bg-white text-black text-xs font-bold rounded-lg hover:bg-zinc-200 disabled:opacity-50 transition-colors"
-                            >
-                              Publish Reply
-                            </button>
-                          </div>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="text-center py-16 text-zinc-500">
-                        <MessageSquare className="w-12 h-12 text-zinc-700 mx-auto mb-3" />
-                        <h4 className="font-serif text-white mb-1">No review selected</h4>
-                        <p className="text-xs">Pick a review from the sidebar feed to draft a perfect automated AI reply.</p>
+                        ))}
                       </div>
-                    )}
-                  </div>
+                    </div>
 
-                </div>
+                    {/* Reply Draft Workspace */}
+                    <div className="lg:col-span-2 bg-[#0c0c0c] border border-[#1a1a1a] rounded-2xl p-6 space-y-5">
+                      {selectedReviewForReply ? (
+                        <>
+                          <div className="bg-[#050505] p-4 rounded-xl border border-[#1a1a1a]">
+                            <span className="text-[9px] text-zinc-500 font-semibold uppercase tracking-widest block mb-2">Original customer voice</span>
+                            <div className="flex justify-between items-start">
+                              <span className="text-xs font-semibold text-white">{selectedReviewForReply.author} ({selectedReviewForReply.rating} Stars)</span>
+                              <span className="text-[10px] font-mono text-zinc-500">{selectedReviewForReply.location}</span>
+                            </div>
+                            <p className="text-xs text-zinc-400 italic mt-2">"{selectedReviewForReply.text}"</p>
+                          </div>
+
+                          {/* Tone settings for replies */}
+                          <div className="space-y-2">
+                            <label className="block text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">Configure Response Tone</label>
+                            <div className="flex space-x-2">
+                              {(["friendly", "professional", "casual"] as const).map(t => (
+                                <button
+                                  key={t}
+                                  onClick={() => setAiReplyTone(t)}
+                                  className={`flex-1 py-1.5 rounded-lg text-xs capitalize transition-colors border ${
+                                    aiReplyTone === t 
+                                      ? "bg-emerald-950/20 text-emerald-400 border-emerald-900/40" 
+                                      : "bg-[#050505] text-zinc-500 border-[#1a1a1a]"
+                                  }`}
+                                >
+                                  {t} Response
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Draft block */}
+                          <div>
+                            <div className="flex justify-between items-center mb-1.5">
+                              <label className="block text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">AI Generated reply draft</label>
+                              <button
+                                onClick={handleGenerateReply}
+                                disabled={aiReplyLoading}
+                                className="text-[10px] text-emerald-400 hover:underline flex items-center space-x-1"
+                              >
+                                <Sparkles className="w-3 h-3" />
+                                <span>{aiReplyDraft ? "Regenerate alternative" : "Auto-Generate Draft"}</span>
+                              </button>
+                            </div>
+                            <textarea
+                              rows={4}
+                              value={aiReplyDraft}
+                              onChange={(e) => setAiReplyDraft(e.target.value)}
+                              placeholder="Draft reply content directly or trigger AI to write it."
+                              className="w-full bg-[#050505] border border-[#1a1a1a] text-xs text-white placeholder-zinc-700 rounded-lg p-3 focus:outline-none focus:ring-1 focus:ring-emerald-500 leading-relaxed"
+                            />
+                          </div>
+
+                          <div className="flex justify-between items-center pt-3 border-t border-[#1a1a1a]/40">
+                            <span className="text-[10px] text-zinc-500">Note: Saving publishes directly to sync profiles.</span>
+                            <div className="flex space-x-2">
+                              {aiReplyDraft && (
+                                <button
+                                  onClick={() => handleCopyText(aiReplyDraft, 999)}
+                                  className="px-3.5 py-2 rounded-lg border border-[#333] bg-[#050505] text-xs text-zinc-300 font-semibold hover:text-white transition-colors"
+                                >
+                                  Copy reply
+                                </button>
+                              )}
+                              <button
+                                onClick={saveReplyToReview}
+                                disabled={!aiReplyDraft.trim()}
+                                className="px-4 py-2 bg-white text-black text-xs font-bold rounded-lg hover:bg-zinc-200 disabled:opacity-50 transition-colors"
+                              >
+                                Publish Reply
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-center py-16 text-zinc-500">
+                          <MessageSquare className="w-12 h-12 text-zinc-700 mx-auto mb-3" />
+                          <h4 className="font-serif text-white mb-1">No review selected</h4>
+                          <p className="text-xs">Pick a review from the sidebar feed to draft a perfect automated AI reply.</p>
+                        </div>
+                      )}
+                    </div>
+
+                  </div>
+                )}
               </motion.div>
             )}
 
@@ -1870,9 +2349,16 @@ export default function App() {
 
                   <div className="flex justify-end pt-4 border-t border-[#1a1a1a]">
                     <button
-                      onClick={() => {
-                        addLog("Profile Saved", "Synchronized business credentials with Google API wrapper.", "success");
-                        alert("Profile changes synchronized successfully!");
+                      onClick={async () => {
+                        if (user) {
+                          try {
+                            await setDoc(doc(db, "businesses", user.id), { ...businessProfile, userId: user.id });
+                            addLog("Profile Saved", "Synchronized business credentials with Google API wrapper.", "success");
+                            alert("Profile changes synchronized successfully!");
+                          } catch (e) {
+                            handleFirestoreError(e, OperationType.WRITE, `businesses/${user.id}`);
+                          }
+                        }
                       }}
                       className="px-5 py-2 bg-white text-black text-xs font-bold rounded-lg hover:bg-zinc-200 transition-colors"
                     >
@@ -1897,80 +2383,91 @@ export default function App() {
                   <p className="text-xs text-zinc-500">Invite staff members to respond to reviews or track counter analytics.</p>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  
-                  {/* Invite form */}
-                  <div className="bg-[#0c0c0c] border border-[#1a1a1a] rounded-2xl p-6">
-                    <h4 className="text-xs font-semibold text-white uppercase tracking-widest font-mono mb-4">Invite Member</h4>
-                    <form onSubmit={handleInviteTeamMember} className="space-y-4">
-                      <div>
-                        <label className="block text-[10px] text-zinc-500 font-semibold mb-1 uppercase">Full Name</label>
-                        <input
-                          type="text"
-                          required
-                          placeholder="John Doe"
-                          value={inviteName}
-                          onChange={(e) => setInviteName(e.target.value)}
-                          className="w-full bg-[#050505] border border-[#1a1a1a] text-xs text-white rounded-lg p-2.5 focus:outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] text-zinc-500 font-semibold mb-1 uppercase">Email Address</label>
-                        <input
-                          type="email"
-                          required
-                          placeholder="john@sweetbites.com"
-                          value={inviteEmail}
-                          onChange={(e) => setInviteEmail(e.target.value)}
-                          className="w-full bg-[#050505] border border-[#1a1a1a] text-xs text-white rounded-lg p-2.5 focus:outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] text-zinc-500 font-semibold mb-1 uppercase">Role Level</label>
-                        <select
-                          value={inviteRole}
-                          onChange={(e) => setInviteRole(e.target.value as any)}
-                          className="w-full bg-[#050505] border border-[#1a1a1a] text-xs text-white rounded-lg p-2.5 focus:outline-none"
-                        >
-                          <option value="Admin">Administrator</option>
-                          <option value="Manager">Manager</option>
-                          <option value="Editor">Editor (Replies Only)</option>
-                        </select>
-                      </div>
-
-                      <button
-                        type="submit"
-                        className="w-full py-2 bg-white text-black text-xs font-bold rounded-lg hover:bg-zinc-200 transition-colors flex items-center justify-center space-x-1.5"
-                      >
-                        <UserPlus className="w-3.5 h-3.5" />
-                        <span>Send Invite Link</span>
-                      </button>
-                    </form>
-                  </div>
-
-                  {/* Team Members List */}
-                  <div className="lg:col-span-2 bg-[#0c0c0c] border border-[#1a1a1a] rounded-2xl p-6">
-                    <h4 className="text-xs font-semibold text-white uppercase tracking-widest font-mono mb-4">Active Roster</h4>
+                {user && user.plan === "Free" ? (
+                  <ProLockOverlay
+                    user={user}
+                    featureName="Team Members & Collaboration"
+                    onUpgradeSuccess={(newPlan) => {
+                      setUser(prev => prev ? { ...prev, plan: newPlan } : null);
+                      addLog("Account Upgraded", "Successfully activated Premium Pro subscription!", "success");
+                    }}
+                  />
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     
-                    <div className="divide-y divide-[#1a1a1a] text-xs">
-                      {team.map(member => (
-                        <div key={member.id} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
-                          <div>
-                            <span className="font-semibold text-white block">{member.name}</span>
-                            <span className="text-[10px] text-zinc-500 font-mono">{member.email}</span>
-                          </div>
-                          <div className="flex items-center space-x-4">
-                            <span className="text-[10px] text-zinc-400 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800 font-mono">{member.role}</span>
-                            <span className={`text-[10px] font-bold ${member.status === "Active" ? "text-emerald-400" : "text-amber-400"}`}>
-                              {member.status}
-                            </span>
-                          </div>
+                    {/* Invite form */}
+                    <div className="bg-[#0c0c0c] border border-[#1a1a1a] rounded-2xl p-6">
+                      <h4 className="text-xs font-semibold text-white uppercase tracking-widest font-mono mb-4">Invite Member</h4>
+                      <form onSubmit={handleInviteTeamMember} className="space-y-4">
+                        <div>
+                          <label className="block text-[10px] text-zinc-500 font-semibold mb-1 uppercase">Full Name</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="John Doe"
+                            value={inviteName}
+                            onChange={(e) => setInviteName(e.target.value)}
+                            className="w-full bg-[#050505] border border-[#1a1a1a] text-xs text-white rounded-lg p-2.5 focus:outline-none"
+                          />
                         </div>
-                      ))}
-                    </div>
-                  </div>
+                        <div>
+                          <label className="block text-[10px] text-zinc-500 font-semibold mb-1 uppercase">Email Address</label>
+                          <input
+                            type="email"
+                            required
+                            placeholder="john@sweetbites.com"
+                            value={inviteEmail}
+                            onChange={(e) => setInviteEmail(e.target.value)}
+                            className="w-full bg-[#050505] border border-[#1a1a1a] text-xs text-white rounded-lg p-2.5 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-zinc-500 font-semibold mb-1 uppercase">Role Level</label>
+                          <select
+                            value={inviteRole}
+                            onChange={(e) => setInviteRole(e.target.value as any)}
+                            className="w-full bg-[#050505] border border-[#1a1a1a] text-xs text-white rounded-lg p-2.5 focus:outline-none"
+                          >
+                            <option value="Admin">Administrator</option>
+                            <option value="Manager">Manager</option>
+                            <option value="Editor">Editor (Replies Only)</option>
+                          </select>
+                        </div>
 
-                </div>
+                        <button
+                          type="submit"
+                          className="w-full py-2 bg-white text-black text-xs font-bold rounded-lg hover:bg-zinc-200 transition-colors flex items-center justify-center space-x-1.5"
+                        >
+                          <UserPlus className="w-3.5 h-3.5" />
+                          <span>Send Invite Link</span>
+                        </button>
+                      </form>
+                    </div>
+
+                    {/* Team Members List */}
+                    <div className="lg:col-span-2 bg-[#0c0c0c] border border-[#1a1a1a] rounded-2xl p-6">
+                      <h4 className="text-xs font-semibold text-white uppercase tracking-widest font-mono mb-4">Active Roster</h4>
+                      
+                      <div className="divide-y divide-[#1a1a1a] text-xs">
+                        {team.map(member => (
+                          <div key={member.id} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
+                            <div>
+                              <span className="font-semibold text-white block">{member.name}</span>
+                              <span className="text-[10px] text-zinc-500 font-mono">{member.email}</span>
+                            </div>
+                            <div className="flex items-center space-x-4">
+                              <span className="text-[10px] text-zinc-400 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800 font-mono">{member.role}</span>
+                              <span className={`text-[10px] font-bold ${member.status === "Active" ? "text-emerald-400" : "text-amber-400"}`}>
+                                {member.status}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                  </div>
+                )}
               </motion.div>
             )}
 
@@ -2333,6 +2830,11 @@ export default function App() {
               </motion.div>
             )}
 
+            {/* 13. SYSTEM HEALTH DASHBOARD */}
+            {activeSection === "system_health" && (
+              <SystemHealth />
+            )}
+
           </AnimatePresence>
         </div>
 
@@ -2402,7 +2904,14 @@ export default function App() {
 
       {/* Share Review Link Dialog Popup */}
       {sharingQRCode && (() => {
-        const slug = sharingQRCode.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
+        let slug = "";
+        if (sharingQRCode.url) {
+          const parts = sharingQRCode.url.split("/");
+          slug = parts[parts.length - 1];
+        }
+        if (!slug || slug === "r" || slug === "review" || slug.startsWith("http")) {
+          slug = sharingQRCode.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
+        }
         const shareUrl = `${window.location.origin}/r/${slug}`;
         const encodedUrl = encodeURIComponent(shareUrl);
         const businessName = businessProfile.name;
@@ -2631,6 +3140,118 @@ export default function App() {
                 Download Package (SVG/PDF)
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Consolidated A4 Feedback Station Flyer Print Overlay */}
+      {showAllQRFlyer && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-start p-6 bg-black/85 backdrop-blur-md overflow-y-auto">
+          
+          {/* Non-printable action controls */}
+          <div className="w-full max-w-4xl bg-[#0c0c0c] border border-zinc-900 rounded-2xl p-4 mb-6 flex flex-col md:flex-row justify-between items-center gap-4 text-center md:text-left print:hidden">
+            <div>
+              <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-400">A4 Multi-QR Flyer Export Utility</h3>
+              <p className="text-xs text-zinc-500 mt-1">This tool dynamically generates a single high-quality A4 print flyer containing all active QR feedback codes for placement on customer tables, counters, or room walls.</p>
+            </div>
+            <div className="flex items-center space-x-3 shrink-0">
+              <button
+                onClick={() => {
+                  window.print();
+                  addLog("Printed All QR Flyer", `Triggered print dialog for Consolidated A4 flyer containing ${qrCodes.filter(q => q.status === "Active").length} active stations.`, "info");
+                }}
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs rounded-xl flex items-center space-x-2 transition-all shadow-lg"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Print or Save A4 PDF</span>
+              </button>
+              <button
+                onClick={() => {
+                  alert(`Compiling and downloading high-definition PDF and scalable vector package...`);
+                  addLog("Downloaded A4 Vector Pack", `Retrieved consolidated SVG/PDF assets for active stations.`, "success");
+                }}
+                className="px-4 py-2 bg-[#141414] border border-zinc-800 hover:text-white text-zinc-300 font-semibold text-xs rounded-xl flex items-center space-x-2 transition-all"
+              >
+                <FileDown className="w-4 h-4" />
+                <span>Direct Download</span>
+              </button>
+              <button
+                onClick={() => setShowAllQRFlyer(false)}
+                className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-900 rounded-xl transition-all"
+                title="Close Export Panel"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Printable A4 Flyer Mockup */}
+          <div 
+            id="printable-a4-flyer" 
+            className="w-full max-w-[210mm] aspect-[1/1.414] bg-white text-black p-12 flex flex-col justify-between shadow-2xl border border-zinc-200 rounded-lg select-none relative"
+          >
+            {/* Elegant Header Frame */}
+            <div className="text-center space-y-3 pb-6 border-b-2 border-black">
+              <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold block font-mono">Feedback Terminal & Reputation Gateway</span>
+              <h1 className="text-3xl font-serif font-bold italic text-slate-950 leading-tight">
+                {businessProfile.name || "Sweet Bites Bakery"}
+              </h1>
+              <p className="text-xs text-zinc-600 max-w-lg mx-auto font-sans leading-relaxed">
+                We strive for absolute perfection in every experience. Please support our hard-working local team by scanning the code at your table or station to leave us your feedback directly on Google!
+              </p>
+            </div>
+
+            {/* Main QR Cards Grid */}
+            <div className="my-auto py-8">
+              <div className="grid grid-cols-2 gap-8">
+                {qrCodes.filter(q => q.status === "Active").map((qr) => {
+                  let slug = "";
+                  if (qr.url) {
+                    const parts = qr.url.split("/");
+                    slug = parts[parts.length - 1];
+                  }
+                  if (!slug || slug === "r" || slug === "review" || slug.startsWith("http")) {
+                    slug = qr.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
+                  }
+                  const liveReviewUrl = `${window.location.origin}/r/${slug}`;
+
+                  return (
+                    <div key={qr.id} className="border border-zinc-300 p-6 rounded-xl flex flex-col items-center justify-center text-center space-y-4 bg-[#fcfcfc] shadow-sm animate-fade-in">
+                      <span className="text-[9px] uppercase font-bold tracking-widest text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded font-mono">
+                        {qr.name} Station
+                      </span>
+                      
+                      {/* High-res print QR */}
+                      <div className="p-3 bg-white border border-black rounded-xl">
+                        <img 
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(liveReviewUrl)}`}
+                          alt={qr.name}
+                          className="w-28 h-28"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold text-slate-900 block font-mono">1. Scan Table Code</span>
+                        <span className="text-[8px] text-zinc-500 block truncate font-mono max-w-[150px]">{liveReviewUrl}</span>
+                      </div>
+
+                      {/* Gating prompt */}
+                      <div className="flex flex-col items-center space-y-0.5">
+                        <div className="flex text-amber-500 text-[10px] tracking-wider">★★★★★</div>
+                        <span className="text-[8px] text-zinc-500 font-sans uppercase tracking-tight">Requires {qr.ratingRequired}+ Stars Gating</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Footer Brand Verification */}
+            <div className="flex justify-between items-center pt-5 border-t border-zinc-200 text-[9px] text-zinc-400 font-mono">
+              <span>Secure NFC & QR Encrypted Terminal Routing</span>
+              <span>Powered by ReviewPlease Reputation SaaS</span>
+            </div>
+            
           </div>
         </div>
       )}

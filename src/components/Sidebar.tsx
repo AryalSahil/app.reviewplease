@@ -13,7 +13,8 @@ import {
   HelpCircle,
   Star,
   X,
-  Palette
+  Palette,
+  Activity
 } from "lucide-react";
 import { User, BusinessProfile } from "../types";
 
@@ -31,7 +32,8 @@ export type ActiveSection =
   | "subscription"
   | "notifications"
   | "settings"
-  | "help";
+  | "help"
+  | "system_health";
 
 interface SidebarProps {
   activeSection: ActiveSection;
@@ -41,6 +43,7 @@ interface SidebarProps {
   unreadCount: number;
   isOpen: boolean;
   onClose: () => void;
+  onAdminAccess?: () => void;
 }
 
 export default function Sidebar({ 
@@ -50,7 +53,8 @@ export default function Sidebar({
   businessProfile,
   unreadCount,
   isOpen,
-  onClose
+  onClose,
+  onAdminAccess
 }: SidebarProps) {
 
   const menuItems = [
@@ -71,6 +75,7 @@ export default function Sidebar({
       icon: Bell, 
       count: unreadCount > 0 ? unreadCount : undefined 
     },
+    { id: "system_health" as ActiveSection, label: "System Health", icon: Activity, badge: "Live" },
     { id: "settings" as ActiveSection, label: "Settings", icon: Settings },
     { id: "help" as ActiveSection, label: "Help & Support", icon: HelpCircle },
   ];
@@ -180,7 +185,15 @@ export default function Sidebar({
         </nav>
 
         {/* Sidebar Footer */}
-        <div className="p-4 border-t border-[#1a1a1a] bg-[#050505]">
+        <div className="p-4 border-t border-[#1a1a1a] bg-[#050505] space-y-3">
+          {onAdminAccess && (
+            <button
+              onClick={onAdminAccess}
+              className="w-full flex items-center justify-center space-x-1.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider text-emerald-400 bg-emerald-950/10 border border-emerald-900/20 hover:bg-emerald-950/20 transition-all cursor-pointer"
+            >
+              <span>🔐 Super Admin Panel</span>
+            </button>
+          )}
           <div className="flex items-center space-x-3">
             <img
               src={user.avatar}

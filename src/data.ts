@@ -187,42 +187,42 @@ export const initialBilling: BillingInvoice[] = [
   {
     id: "INV-2026-006",
     date: "2026-06-15",
-    amount: 49.00,
+    amount: 99.00,
     status: "Paid",
     plan: "Pro Plan (Monthly)"
   },
   {
     id: "INV-2026-005",
     date: "2026-05-15",
-    amount: 49.00,
+    amount: 99.00,
     status: "Paid",
     plan: "Pro Plan (Monthly)"
   },
   {
     id: "INV-2026-004",
     date: "2026-04-15",
-    amount: 49.00,
+    amount: 99.00,
     status: "Paid",
     plan: "Pro Plan (Monthly)"
   },
   {
     id: "INV-2026-003",
     date: "2026-03-15",
-    amount: 49.00,
+    amount: 99.00,
     status: "Paid",
     plan: "Pro Plan (Monthly)"
   },
   {
     id: "INV-2026-002",
     date: "2026-02-15",
-    amount: 49.00,
+    amount: 99.00,
     status: "Paid",
     plan: "Pro Plan (Monthly)"
   },
   {
     id: "INV-2026-001",
     date: "2026-01-15",
-    amount: 49.00,
+    amount: 99.00,
     status: "Paid",
     plan: "Pro Plan (Monthly)"
   }
