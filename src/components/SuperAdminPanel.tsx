@@ -46,6 +46,15 @@ import {
 } from "lucide-react";
 import { User, BusinessProfile, QRCodeItem, Review } from "../types";
 import {
+  db,
+  collection,
+  doc,
+  onSnapshot,
+  setDoc,
+  updateDoc,
+  deleteDoc
+} from "../lib/firebase";
+import {
   ResponsiveContainer,
   AreaChart,
   Area,
@@ -136,60 +145,205 @@ export default function SuperAdminPanel({ onExit, onImpersonate }: SuperAdminPan
   // Authentication State
   const [isAuth, setIsAuth] = useState(false);
   const [authStep, setAuthStep] = useState<"login" | "2fa">("login");
-  const [emailInput, setEmailInput] = useState("admin@reviewplease.io");
-  const [passwordInput, setPasswordInput] = useState("admin123");
+  const [emailInput, setEmailInput] = useState("aryalsahil@proton.me");
+  const [passwordInput, setPasswordInput] = useState("Sahil2007");
   const [otpInput, setOtpInput] = useState("");
   const [authError, setAuthError] = useState("");
   const [isAuthLoading, setIsAuthLoading] = useState(false);
 
-  // Core Admin States & Mock Data
-  const [businesses, setBusinesses] = useState<AdminBusiness[]>([
-    { id: "biz_1", name: "Sweet Bites Bakery", ownerName: "Sarah Jenkins", email: "owner@sweetbites.com", plan: "Pro", status: "Active", joinedDate: "2026-01-15", scans: 2645, reviewsCount: 42 },
-    { id: "biz_2", name: "Golden Gate Gym", ownerName: "Mike Henderson", email: "mike@goldengategym.com", plan: "Enterprise", status: "Active", joinedDate: "2026-02-10", scans: 14890, reviewsCount: 388 },
-    { id: "biz_3", name: "Apex Dental Care", ownerName: "Dr. Linda Porter", email: "contact@apexdental.com", plan: "Pro", status: "Active", joinedDate: "2026-03-01", scans: 1102, reviewsCount: 89 },
-    { id: "biz_4", name: "Bella Italia Bistro", ownerName: "Giovanni Rossi", email: "gio@bellaitalia.com", plan: "Free", status: "Active", joinedDate: "2026-04-12", scans: 450, reviewsCount: 15 },
-    { id: "biz_5", name: "Cascade Tech Labs", ownerName: "David Vance", email: "vance@cascadetech.io", plan: "Pro", status: "Suspended", joinedDate: "2026-05-18", scans: 95, reviewsCount: 2 }
-  ]);
-
-  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([
-    { id: "usr_1", name: "Sarah Jenkins", email: "owner@sweetbites.com", businessName: "Sweet Bites Bakery", role: "Owner", status: "Active", emailVerified: true, lastLogin: "2026-06-29 09:12" },
-    { id: "usr_2", name: "Mike Henderson", email: "mike@goldengategym.com", businessName: "Golden Gate Gym", role: "Owner", status: "Active", emailVerified: true, lastLogin: "2026-06-28 18:45" },
-    { id: "usr_3", name: "Dr. Linda Porter", email: "contact@apexdental.com", businessName: "Apex Dental Care", role: "Owner", status: "Active", emailVerified: true, lastLogin: "2026-06-29 08:30" },
-    { id: "usr_4", name: "Giovanni Rossi", email: "gio@bellaitalia.com", businessName: "Bella Italia Bistro", role: "Owner", status: "Active", emailVerified: false, lastLogin: "2026-06-25 14:20" },
-    { id: "usr_5", name: "David Vance", email: "vance@cascadetech.io", businessName: "Cascade Tech Labs", role: "Owner", status: "Suspended", emailVerified: true, lastLogin: "2026-06-20 11:05" }
-  ]);
-
-  const [coupons, setCoupons] = useState<Coupon[]>([
-    { code: "SUPER50", discount: 50, type: "percent", expiry: "2026-12-31", limit: 200, used: 84 },
-    { code: "BREADPRO", discount: 15, type: "fixed", expiry: "2026-09-30", limit: 50, used: 12 },
-    { code: "VIPLAUNCH", discount: 100, type: "percent", expiry: "2026-07-31", limit: 10, used: 10 }
-  ]);
-
-  const [tickets, setTickets] = useState<Ticket[]>([
-    { id: "tkt_102", user: "Sarah Jenkins", subject: "NFC Writing Error on iPhone 15", category: "Technical", priority: "High", status: "Open", date: "2026-06-29", messages: [{ sender: "Sarah Jenkins", text: "I tried copying the NFC payload but my phone keeps saying write error.", time: "10:15 AM" }] },
-    { id: "tkt_101", user: "Mike Henderson", subject: "Custom Domain Integration Setup", category: "Technical", priority: "Medium", status: "In Progress", date: "2026-06-28", messages: [{ sender: "Mike Henderson", text: "We need our reviews portal on feedback.goldengategym.com", time: "04:30 PM" }] },
-    { id: "tkt_100", user: "Dr. Linda Porter", subject: "Invoice mismatch for annual billing", category: "Billing", priority: "Low", status: "Resolved", date: "2026-06-26", messages: [{ sender: "Dr. Linda Porter", text: "The coupon was not applied on the first check.", time: "09:00 AM" }, { sender: "Support Admin", text: "Apologies, we processed a refund of ₹99 for the variance.", time: "11:30 AM" }] }
-  ]);
-
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([
-    { id: "log_1", timestamp: "2026-06-29 11:35:12", ip: "104.244.75.12", action: "User Impersonation", details: "Admin impersonated Mike Henderson (Golden Gate Gym)", status: "Success" },
-    { id: "log_2", timestamp: "2026-06-29 10:50:24", ip: "104.244.75.12", action: "Coupon Created", details: "Coupon BREADPRO (₹15 Off) added to directory", status: "Success" },
-    { id: "log_3", timestamp: "2026-06-29 08:12:44", ip: "198.51.100.84", action: "Failed Authentication Attempt", details: "Brute-force alert on username 'admin_root'", status: "Warning" },
-    { id: "log_4", timestamp: "2026-06-28 23:45:01", ip: "104.244.75.12", action: "Settings Update", details: "AI Response temperature set to 0.7", status: "Success" }
-  ]);
-
-  const [blockedIPs, setBlockedIPs] = useState<string[]>(["198.51.100.84", "203.0.113.15"]);
+  // Core Admin States & Real-Time Firebase Data
+  const [businesses, setBusinesses] = useState<AdminBusiness[]>([]);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [blockedIPs, setBlockedIPs] = useState<string[]>([]);
   const [newBlockedIP, setNewBlockedIP] = useState("");
 
   // Reviews dynamic state for SuperAdminPanel
-  const [adminReviews, setAdminReviews] = useState<AdminReview[]>([
-    { id: "rev_1", author: "Michael Chang", business: "Sweet Bites Bakery", rating: 5, content: "The almond croissants here are life-changing! Crispy on the outside, light and rich inside.", type: "Google redirected", flagged: false },
-    { id: "rev_2", author: "Robert Downey", business: "Golden Gate Gym", rating: 2, content: "Equipments are good but the showers were cold this morning. Hope they fix the heater.", type: "Gated Private Feed", flagged: true },
-    { id: "rev_3", author: "Sarah Miller", business: "Apex Dental Care", rating: 5, content: "Incredibly professional staff and completely painless cleaning. Dr. Linda was wonderful!", type: "Google redirected", flagged: false },
-    { id: "rev_4", author: "Giovanni Rossi", business: "Bella Italia Bistro", rating: 1, content: "Waited 45 minutes for cold pasta. Extremely disappointed with the service tonight.", type: "Gated Private Feed", flagged: false },
-    { id: "rev_5", author: "Emily Watson", business: "Sweet Bites Bakery", rating: 4, content: "Lovely cupcakes and beautiful shop! A bit crowded on Saturday morning, but worth the wait.", type: "Google redirected", flagged: false }
-  ]);
+  const [adminReviews, setAdminReviews] = useState<AdminReview[]>([]);
   const [selectedReviewIds, setSelectedReviewIds] = useState<string[]>([]);
+
+  // 1. Listen for Businesses in Firestore
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "businesses"), (snapshot) => {
+      if (snapshot.empty) {
+        const initialBusinesses = [
+          { id: "biz_1", name: "Sweet Bites Bakery", ownerName: "Sarah Jenkins", email: "owner@sweetbites.com", plan: "Pro", status: "Active", joinedDate: "2026-01-15", scans: 2645, reviewsCount: 42 },
+          { id: "biz_2", name: "Golden Gate Gym", ownerName: "Mike Henderson", email: "mike@goldengategym.com", plan: "Enterprise", status: "Active", joinedDate: "2026-02-10", scans: 14890, reviewsCount: 388 },
+          { id: "biz_3", name: "Apex Dental Care", ownerName: "Dr. Linda Porter", email: "contact@apexdental.com", plan: "Pro", status: "Active", joinedDate: "2026-03-01", scans: 1102, reviewsCount: 89 },
+          { id: "biz_4", name: "Bella Italia Bistro", ownerName: "Giovanni Rossi", email: "gio@bellaitalia.com", plan: "Free", status: "Active", joinedDate: "2026-04-12", scans: 450, reviewsCount: 15 },
+          { id: "biz_5", name: "Cascade Tech Labs", ownerName: "David Vance", email: "vance@cascadetech.io", plan: "Pro", status: "Suspended", joinedDate: "2026-05-18", scans: 95, reviewsCount: 2 }
+        ];
+        initialBusinesses.forEach(b => {
+          setDoc(doc(db, "businesses", b.id), b).catch(err => console.error(err));
+        });
+        return;
+      }
+      const list = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          name: data.name || "Unnamed Business",
+          ownerName: data.ownerName || "Owner",
+          email: data.email || "",
+          plan: data.plan || "Free",
+          status: data.status || "Active",
+          joinedDate: data.joinedDate || new Date().toISOString().split("T")[0],
+          scans: data.scans || 0,
+          reviewsCount: data.reviewsCount || 0
+        } as AdminBusiness;
+      });
+      setBusinesses(list);
+    });
+    return () => unsub();
+  }, []);
+
+  // 2. Listen for Users in Firestore
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "users"), (snapshot) => {
+      if (snapshot.empty) {
+        const initialUsersList = [
+          { id: "usr_1", name: "Sarah Jenkins", email: "owner@sweetbites.com", businessName: "Sweet Bites Bakery", role: "Owner", status: "Active", emailVerified: true, lastLogin: "2026-06-29 09:12" },
+          { id: "usr_2", name: "Mike Henderson", email: "mike@goldengategym.com", businessName: "Golden Gate Gym", role: "Owner", status: "Active", emailVerified: true, lastLogin: "2026-06-28 18:45" },
+          { id: "usr_3", name: "Dr. Linda Porter", email: "contact@apexdental.com", businessName: "Apex Dental Care", role: "Owner", status: "Active", emailVerified: true, lastLogin: "2026-06-29 08:30" },
+          { id: "usr_4", name: "Giovanni Rossi", email: "gio@bellaitalia.com", businessName: "Bella Italia Bistro", role: "Owner", status: "Active", emailVerified: false, lastLogin: "2026-06-25 14:20" },
+          { id: "usr_5", name: "David Vance", email: "vance@cascadetech.io", businessName: "Cascade Tech Labs", role: "Owner", status: "Suspended", emailVerified: true, lastLogin: "2026-06-20 11:05" }
+        ];
+        initialUsersList.forEach(u => {
+          setDoc(doc(db, "users", u.id), u).catch(err => console.error(err));
+        });
+        return;
+      }
+      const list = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          name: data.name || "User",
+          email: data.email || "",
+          businessName: data.businessName || "My Business",
+          role: data.role || "Owner",
+          status: data.status || "Active",
+          emailVerified: !!data.emailVerified,
+          lastLogin: data.lastLogin || new Date().toISOString().replace("T", " ").substring(0, 16)
+        } as AdminUser;
+      });
+      setAdminUsers(list);
+    });
+    return () => unsub();
+  }, []);
+
+  // 3. Listen for Coupons in Firestore
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "coupons"), (snapshot) => {
+      if (snapshot.empty) {
+        const initialCoupons = [
+          { code: "SUPER50", discount: 50, type: "percent", expiry: "2026-12-31", limit: 200, used: 84 },
+          { code: "BREADPRO", discount: 15, type: "fixed", expiry: "2026-09-30", limit: 50, used: 12 },
+          { code: "VIPLAUNCH", discount: 100, type: "percent", expiry: "2026-07-31", limit: 10, used: 10 }
+        ];
+        initialCoupons.forEach(c => {
+          setDoc(doc(db, "coupons", c.code), c).catch(err => console.error(err));
+        });
+        return;
+      }
+      const list = snapshot.docs.map(doc => doc.data() as Coupon);
+      setCoupons(list);
+    });
+    return () => unsub();
+  }, []);
+
+  // 4. Listen for Tickets in Firestore
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "tickets"), (snapshot) => {
+      if (snapshot.empty) {
+        const initialTickets = [
+          { id: "tkt_102", user: "Sarah Jenkins", subject: "NFC Writing Error on iPhone 15", category: "Technical", priority: "High", status: "Open", date: "2026-06-29", messages: [{ sender: "Sarah Jenkins", text: "I tried copying the NFC payload but my phone keeps saying write error.", time: "10:15 AM" }] },
+          { id: "tkt_101", user: "Mike Henderson", subject: "Custom Domain Integration Setup", category: "Technical", priority: "Medium", status: "In Progress", date: "2026-06-28", messages: [{ sender: "Mike Henderson", text: "We need our reviews portal on feedback.goldengategym.com", time: "04:30 PM" }] },
+          { id: "tkt_100", user: "Dr. Linda Porter", subject: "Invoice mismatch for annual billing", category: "Billing", priority: "Low", status: "Resolved", date: "2026-06-26", messages: [{ sender: "Dr. Linda Porter", text: "The coupon was not applied on the first check.", time: "09:00 AM" }, { sender: "Support Admin", text: "Apologies, we processed a refund of ₹99 for the variance.", time: "11:30 AM" }] }
+        ];
+        initialTickets.forEach(t => {
+          setDoc(doc(db, "tickets", t.id), t).catch(err => console.error(err));
+        });
+        return;
+      }
+      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Ticket);
+      setTickets(list);
+    });
+    return () => unsub();
+  }, []);
+
+  // 5. Listen for Audit Logs in Firestore
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "audit_logs"), (snapshot) => {
+      if (snapshot.empty) {
+        const initialLogs = [
+          { id: "log_1", timestamp: "2026-06-29 11:35:12", ip: "104.244.75.12", action: "User Impersonation", details: "Admin impersonated Mike Henderson (Golden Gate Gym)", status: "Success" },
+          { id: "log_2", timestamp: "2026-06-29 10:50:24", ip: "104.244.75.12", action: "Coupon Created", details: "Coupon BREADPRO (₹15 Off) added to directory", status: "Success" },
+          { id: "log_3", timestamp: "2026-06-29 08:12:44", ip: "198.51.100.84", action: "Failed Authentication Attempt", details: "Brute-force alert on username 'admin_root'", status: "Warning" },
+          { id: "log_4", timestamp: "2026-06-28 23:45:01", ip: "104.244.75.12", action: "Settings Update", details: "AI Response temperature set to 0.7", status: "Success" }
+        ];
+        initialLogs.forEach(l => {
+          setDoc(doc(db, "audit_logs", l.id), l).catch(err => console.error(err));
+        });
+        return;
+      }
+      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as AuditLog);
+      list.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+      setAuditLogs(list);
+    });
+    return () => unsub();
+  }, []);
+
+  // 6. Listen for Blocked IPs in Firestore
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "blocked_ips"), (snapshot) => {
+      if (snapshot.empty) {
+        const initialIPs = ["198.51.100.84", "203.0.113.15"];
+        initialIPs.forEach(ip => {
+          const id = ip.replace(/\./g, "_");
+          setDoc(doc(db, "blocked_ips", id), { ip }).catch(err => console.error(err));
+        });
+        return;
+      }
+      const list = snapshot.docs.map(doc => doc.data().ip as string);
+      setBlockedIPs(list);
+    });
+    return () => unsub();
+  }, []);
+
+  // 7. Listen for Admin Reviews in Firestore
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "reviews"), (snapshot) => {
+      if (snapshot.empty) {
+        const initialReviews = [
+          { id: "rev_1", author: "Michael Chang", business: "Sweet Bites Bakery", rating: 5, content: "The almond croissants here are life-changing! Crispy on the outside, light and rich inside.", type: "Google redirected", flagged: false },
+          { id: "rev_2", author: "Robert Downey", business: "Golden Gate Gym", rating: 2, content: "Equipments are good but the showers were cold this morning. Hope they fix the heater.", type: "Gated Private Feed", flagged: true },
+          { id: "rev_3", author: "Sarah Miller", business: "Apex Dental Care", rating: 5, content: "Incredibly professional staff and completely painless cleaning. Dr. Linda was wonderful!", type: "Google redirected", flagged: false },
+          { id: "rev_4", author: "Giovanni Rossi", business: "Bella Italia Bistro", rating: 1, content: "Waited 45 minutes for cold pasta. Extremely disappointed with the service tonight.", type: "Gated Private Feed", flagged: false },
+          { id: "rev_5", author: "Emily Watson", business: "Sweet Bites Bakery", rating: 4, content: "Lovely cupcakes and beautiful shop! A bit crowded on Saturday morning, but worth the wait.", type: "Google redirected", flagged: false }
+        ];
+        initialReviews.forEach(r => {
+          setDoc(doc(db, "reviews", r.id), r).catch(err => console.error(err));
+        });
+        return;
+      }
+      const list = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          author: data.author || data.authorName || "Anonymous",
+          business: data.business || data.businessName || "My Business",
+          rating: data.rating || 5,
+          content: data.content || "",
+          type: data.type || "Google redirected",
+          flagged: !!data.flagged
+        } as AdminReview;
+      });
+      setAdminReviews(list);
+    });
+    return () => unsub();
+  }, []);
 
   // Live latency tracking for Gemini AI Service
   const [aiLatencyHistory, setAiLatencyHistory] = useState<{ time: string; latency: number }[]>([
@@ -237,11 +391,7 @@ export default function SuperAdminPanel({ onExit, onImpersonate }: SuperAdminPan
   ]);
 
   // Billing History state
-  const [billingHistory, setBillingHistory] = useState([
-    { id: "inv_441", business: "Sweet Bites Bakery", date: "2026-06-25", amount: 99, status: "Paid", plan: "Pro" },
-    { id: "inv_440", business: "Golden Gate Gym", date: "2026-06-20", amount: 499, status: "Paid", plan: "Enterprise" },
-    { id: "inv_439", business: "Apex Dental Care", date: "2026-06-18", amount: 99, status: "Failed", plan: "Pro" }
-  ]);
+  const [billingHistory, setBillingHistory] = useState<{ id: string; business: string; date: string; amount: number; status: string; plan: string }[]>([]);
 
   // Coupon Form Inputs
   const [newCouponCode, setNewCouponCode] = useState("");
@@ -312,19 +462,29 @@ export default function SuperAdminPanel({ onExit, onImpersonate }: SuperAdminPan
     }
   };
 
-  const handleBatchFlag = (flag: boolean) => {
-    setAdminReviews(prev => 
-      prev.map(r => selectedReviewIds.includes(r.id) ? { ...r, flagged: flag } : r)
-    );
-    triggerAlert(`Successfully ${flag ? "flagged" : "unflagged"} ${selectedReviewIds.length} review(s).`);
-    setSelectedReviewIds([]);
+  const handleBatchFlag = async (flag: boolean) => {
+    try {
+      for (const id of selectedReviewIds) {
+        await updateDoc(doc(db, "reviews", id), { flagged: flag });
+      }
+      triggerAlert(`Successfully ${flag ? "flagged" : "unflagged"} ${selectedReviewIds.length} review(s).`);
+      setSelectedReviewIds([]);
+    } catch (e) {
+      console.error("Error batch flagging reviews:", e);
+    }
   };
 
-  const handleBatchDelete = () => {
+  const handleBatchDelete = async () => {
     const count = selectedReviewIds.length;
-    setAdminReviews(prev => prev.filter(r => !selectedReviewIds.includes(r.id)));
-    triggerAlert(`Successfully deleted ${count} review(s).`);
-    setSelectedReviewIds([]);
+    try {
+      for (const id of selectedReviewIds) {
+        await deleteDoc(doc(db, "reviews", id));
+      }
+      triggerAlert(`Successfully deleted ${count} review(s).`);
+      setSelectedReviewIds([]);
+    } catch (e) {
+      console.error("Error batch deleting reviews:", e);
+    }
   };
 
   // Secure Authentication Handlers
@@ -333,7 +493,7 @@ export default function SuperAdminPanel({ onExit, onImpersonate }: SuperAdminPan
     setAuthError("");
     setIsAuthLoading(true);
 
-    setTimeout(() => {
+    setTimeout(async () => {
       if (emailInput === "aryalsahil@proton.me" && passwordInput === "Sahil2007") {
         setIsAuth(true);
         triggerAlert("Secure session verified. Welcome back, Administrator.");
@@ -346,7 +506,11 @@ export default function SuperAdminPanel({ onExit, onImpersonate }: SuperAdminPan
           details: "Administrator authenticated successfully via secure password",
           status: "Success"
         };
-        setAuditLogs(prev => [newLog, ...prev]);
+        try {
+          await setDoc(doc(db, "audit_logs", newLog.id), newLog);
+        } catch (err) {
+          console.error("Error saving audit log:", err);
+        }
       } else {
         setAuthError("Invalid administrative credentials.");
       }
@@ -359,7 +523,7 @@ export default function SuperAdminPanel({ onExit, onImpersonate }: SuperAdminPan
     setAuthError("");
     setIsAuthLoading(true);
 
-    setTimeout(() => {
+    setTimeout(async () => {
       if (otpInput === "123456" || otpInput.length === 6) {
         setIsAuth(true);
         triggerAlert("Secure session verified. Welcome back, Administrator.");
@@ -372,7 +536,11 @@ export default function SuperAdminPanel({ onExit, onImpersonate }: SuperAdminPan
           details: "Administrator authenticated successfully via secure password + 2FA",
           status: "Success"
         };
-        setAuditLogs(prev => [newLog, ...prev]);
+        try {
+          await setDoc(doc(db, "audit_logs", newLog.id), newLog);
+        } catch (err) {
+          console.error("Error saving audit log:", err);
+        }
       } else {
         setAuthError("Invalid 2FA code. (Use code: 123456)");
       }
@@ -388,23 +556,28 @@ export default function SuperAdminPanel({ onExit, onImpersonate }: SuperAdminPan
   };
 
   // Administrative CRUD Actions
-  const toggleBusinessStatus = (id: string) => {
-    setBusinesses(prev =>
-      prev.map(b => {
-        if (b.id === id) {
-          const nextStatus = b.status === "Active" ? "Suspended" : "Active";
-          triggerAlert(`Business status updated: ${b.name} is now ${nextStatus}.`);
-          return { ...b, status: nextStatus };
-        }
-        return b;
-      })
-    );
+  const toggleBusinessStatus = async (id: string) => {
+    const b = businesses.find(x => x.id === id);
+    if (!b) return;
+    const nextStatus = b.status === "Active" ? "Suspended" : "Active";
+    try {
+      await updateDoc(doc(db, "businesses", id), { status: nextStatus });
+      await updateDoc(doc(db, "users", id), { status: nextStatus });
+      triggerAlert(`Business status updated: ${b.name} is now ${nextStatus}.`);
+    } catch (e) {
+      console.error("Error toggling business status:", e);
+    }
   };
 
-  const deleteBusiness = (id: string, name: string) => {
+  const deleteBusiness = async (id: string, name: string) => {
     if (confirm(`Are you absolutely sure you want to permanently delete "${name}"? This action is irreversible.`)) {
-      setBusinesses(prev => prev.filter(b => b.id !== id));
-      triggerAlert(`Business "${name}" deleted.`);
+      try {
+        await deleteDoc(doc(db, "businesses", id));
+        await deleteDoc(doc(db, "users", id));
+        triggerAlert(`Business "${name}" deleted.`);
+      } catch (e) {
+        console.error("Error deleting business:", e);
+      }
     }
   };
 
@@ -415,7 +588,7 @@ export default function SuperAdminPanel({ onExit, onImpersonate }: SuperAdminPan
     }, 1200);
   };
 
-  const handleCreateCoupon = (e: React.FormEvent) => {
+  const handleCreateCoupon = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCouponCode.trim()) return;
 
@@ -428,46 +601,61 @@ export default function SuperAdminPanel({ onExit, onImpersonate }: SuperAdminPan
       used: 0
     };
 
-    setCoupons(prev => [newCp, ...prev]);
-    setNewCouponCode("");
-    triggerAlert(`Administrative Coupon ${newCp.code} successfully deployed.`);
+    try {
+      await setDoc(doc(db, "coupons", newCp.code), newCp);
+      setNewCouponCode("");
+      triggerAlert(`Administrative Coupon ${newCp.code} successfully deployed.`);
+    } catch (err) {
+      console.error("Error creating coupon:", err);
+    }
   };
 
-  const handleTicketReply = (ticketId: string) => {
+  const handleTicketReply = async (ticketId: string) => {
     if (!ticketReplyText.trim()) return;
+    const t = tickets.find(x => x.id === ticketId);
+    if (!t) return;
 
-    setTickets(prev =>
-      prev.map(t => {
-        if (t.id === ticketId) {
-          return {
-            ...t,
-            status: "Resolved",
-            messages: [
-              ...t.messages,
-              { sender: "Support Admin", text: ticketReplyText, time: "Just Now" }
-            ]
-          };
-        }
-        return t;
-      })
-    );
+    const updatedTicket = {
+      ...t,
+      status: "Resolved",
+      messages: [
+        ...t.messages,
+        { sender: "Support Admin", text: ticketReplyText, time: "Just Now" }
+      ]
+    };
 
-    setTicketReplyText("");
-    setSelectedTicketId(null);
-    triggerAlert("Response sent. Ticket updated to [Resolved].");
+    try {
+      await setDoc(doc(db, "tickets", ticketId), updatedTicket);
+      setTicketReplyText("");
+      setSelectedTicketId(null);
+      triggerAlert("Response sent. Ticket updated to [Resolved].");
+    } catch (err) {
+      console.error("Error replying to ticket:", err);
+    }
   };
 
-  const handleBlockIP = (e: React.FormEvent) => {
+  const handleBlockIP = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBlockedIP.trim()) return;
-    setBlockedIPs(prev => [...prev, newBlockedIP.trim()]);
-    triggerAlert(`IP ${newBlockedIP} has been blacklisted.`);
-    setNewBlockedIP("");
+    const ip = newBlockedIP.trim();
+    const id = ip.replace(/\./g, "_");
+    try {
+      await setDoc(doc(db, "blocked_ips", id), { ip });
+      triggerAlert(`IP ${ip} has been blacklisted.`);
+      setNewBlockedIP("");
+    } catch (err) {
+      console.error("Error blocking IP:", err);
+    }
   };
 
-  const handleUnblockIP = (ip: string) => {
-    setBlockedIPs(prev => prev.filter(i => i !== ip));
-    triggerAlert(`IP ${ip} removed from blacklist.`);
+  const handleUnblockIP = async (ip: string) => {
+    const id = ip.replace(/\./g, "_");
+    try {
+      await deleteDoc(doc(db, "blocked_ips", id));
+      triggerAlert(`IP ${ip} removed from blacklist.`);
+    } catch (err) {
+      console.error("Error unblocking IP:", err);
+    }
   };
 
   // Simulated Database Backup Exporter
