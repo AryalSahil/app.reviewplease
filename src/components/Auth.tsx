@@ -207,7 +207,11 @@ export default function Auth({ onLogin, onAdminAccess }: AuthProps) {
       onLogin(appUser);
     } catch (err: any) {
       console.error("Google Auth error:", err);
-      setError(err.message || "Failed to sign in with Google.");
+      if (err.code === "auth/unauthorized-domain" || (err.message && err.message.includes("unauthorized-domain"))) {
+        setError(`This domain (${window.location.hostname}) is not authorized for Google Sign-In in your Firebase project. To enable Google Sign-In, please add this domain to the "Authorized Domains" list under Authentication > Settings in your Firebase Console. Alternatively, you can use standard Email & Password sign-in/registration below instantly!`);
+      } else {
+        setError(err.message || "Failed to sign in with Google.");
+      }
     } finally {
       setIsLoading(false);
     }
